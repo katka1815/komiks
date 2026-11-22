@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Komiks">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#ffffff">
+<title>Komiks</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<section id="home">
+  <header>
+    <h1>Komiks</h1>
+    <div class="grow"></div>
+    <label class="btn">Import zálohy<input type="file" id="import" accept=".json,application/json" hidden></label>
+    <button id="new" class="primary">+ Nový projekt</button>
+  </header>
+  <p id="empty" hidden>Zatím tu nic není. Začni novým projektem.</p>
+  <div id="projects"></div>
+</section>
+
+<section id="editor" hidden>
+  <header class="bar">
+    <button id="back" aria-label="Zpět na projekty">‹ Projekty</button>
+    <span id="title"></span>
+    <button id="undo" aria-label="Zpět">↶</button>
+    <button id="redo" aria-label="Znovu">↷</button>
+    <span class="sep"></span>
+    <button id="prev" aria-label="Předchozí stránka">◀</button>
+    <span id="pageno"></span>
+    <button id="next" aria-label="Další stránka">▶</button>
+    <button id="addpage" aria-label="Přidat stránku">＋</button>
+    <button id="duppage" aria-label="Duplikovat stránku">⧉</button>
+    <button id="delpage" aria-label="Smazat stránku">✕</button>
+    <span class="sep"></span>
+    <button id="pencil"></button>
+    <button id="export" class="primary">Export</button>
+  </header>
+  <div class="main">
+    <nav class="side">
+      <div class="grid" id="tools">
+        <button data-tool="pen"><b>✎</b><small>Pero</small></button>
+        <button data-tool="line"><b>╱</b><small>Čára</small></button>
+        <button data-tool="rect"><b>▭</b><small>Obdélník</small></button>
+        <button data-tool="text"><b>T</b><small>Text</small></button>
+        <button data-tool="move"><b>✥</b><small>Posun</small></button>
+        <button data-tool="erase"><b>⌫</b><small>Guma</small></button>
+      </div>
+      <div class="grid" id="sizes"></div>
+      <div class="grid" id="colors"></div>
+    </nav>
+    <div id="stage">
+      <div id="paper">
+        <canvas id="base"></canvas>
+        <canvas id="live"></canvas>
+        <div id="textbox" hidden>
+          <textarea id="ta" rows="1" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+          <div><button id="tok" class="primary">OK</button><button id="tcancel">Zrušit</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<dialog id="dlg"></dialog>
+
+<dialog id="exp">
+  <h2>Export</h2>
+  <div class="rows">
+    <div data-kind="pdf-all"><span>PDF celého komiksu</span><button data-how="share">Sdílet / poslat</button><button data-how="dl">Stáhnout</button></div>
+    <div data-kind="pdf-page"><span>PDF této stránky</span><button data-how="share">Sdílet / poslat</button><button data-how="dl">Stáhnout</button></div>
+    <div data-kind="png"><span>PNG obrázek stránky</span><button data-how="share">Sdílet / poslat</button><button data-how="dl">Stáhnout</button></div>
+    <div data-kind="jpg"><span>JPG obrázek stránky</span><button data-how="share">Sdílet / poslat</button><button data-how="dl">Stáhnout</button></div>
+    <div data-kind="json"><span>Záloha projektu (.json)</span><button data-how="share">Sdílet / poslat</button><button data-how="dl">Stáhnout</button></div>
+  </div>
+  <p id="expmsg"></p>
+  <div class="btns"><button id="expshare" class="primary" hidden>Sdílet soubor</button><button id="expclose">Zavřít</button></div>
+</dialog>
+
+<div id="toast" hidden></div>
+
+<script src="pdf.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
