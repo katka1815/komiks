@@ -238,7 +238,9 @@ live.addEventListener('pointerdown', e => {
     const i = topHit(x, y);
     if (i < 0) { act = null; return; }
     begin(); act.i = i; act.orig = P.pages[cur][i];
-  } else if (t === 'erase' && st.eraseMode === 'part') act.o = { t: 'erase', c: '#000', w: st.eraseWidth, p: [x, y] };
+  }
+  // shortcut: a partial erase is its own stroke, so an object moved later keeps its holes in place; split shapes if that bothers
+  else if (t === 'erase' && st.eraseMode === 'part') act.o = { t: 'erase', c: '#000', w: st.eraseWidth, p: [x, y] };
   else if (t === 'erase') { begin(); erase(x, y); }
   move(e);
 });
