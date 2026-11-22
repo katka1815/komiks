@@ -26,14 +26,20 @@ Všechno je v milimetrech, takže kresba sedí při každé velikosti obrazovky 
 Projekt { id, name, w, h, pages: [[objekt…], …], updated }
 objekt  { t: 'pen' | 'line' | 'rect', c: barva, w: tloušťka, p: [x, y, x, y…] }
         { t: 'text', c: barva, s: velikost písma, p: [x, y], text }
-        každý objekt může mít x: [{ t: 'erase', w: tloušťka gumy, p: [x, y…] }, …]
+        { t: 'poly', c, w, p: [x, y, x, y…] }   kousek rozdělené čáry (rovné úseky)
+        objekt může mít x: [{ t: 'erase', w: tloušťka gumy, p: [x, y…] }, …]
 ```
 
-Guma má dva režimy. „Celé tahy“ smaže celé objekty, kterých se dotkne. „Část“ přidá
-tah gumy do `x` každého objektu, kterého se dotkne. Objekt se pak kreslí zvlášť na
-pomocnou vrstvu, kde se vygumovaná místa vyříznou (`destination-out`). Funguje to na
-čáry, obdélníky i text, platí to i v exportu a díra se při posunu posune s objektem.
-Verze 2 ukládala tahy gumy volně na stránku. Při otevření projektu se převedou do objektů.
+Guma má dva režimy. „Celé tahy“ smaže celé objekty, kterých se dotkne. „Část“ funguje takto:
+- Kde guma čáru, tah perem nebo obdélník přejede přes celou šířku, tvar se rozdělí na kousky
+  (`poly`) a vygumovaná část zmizí. Nic navíc se neukládá ani nekreslí.
+- Kde čáru jen škrtne po okraji, nebo jde o text, uloží se tah gumy do `x` objektu. Objekt se
+  pak kreslí na pomocnou vrstvu a místo se z něj vyřízne (`destination-out`). Díra se posouvá
+  s objektem.
+- Nové konce se zkrátí o půl tloušťky čáry, takže mezera je stejně široká jako guma.
+  Kraje mezery jsou ale kulaté (jako konec každé čáry), ne podle tvaru gumy.
+- Projekty ze starších verzí (volné tahy gumy, ořezy celých tvarů) se při otevření jednou
+  převedou (`v: 4`).
 
 Zoom: dvěma prsty se přibližuje, oddaluje a posouvá. Při zapnutém „Jen Pencil“ posouvá
 stránku i jeden prst. Plátno se při zoomu znovu vykreslí z vektorů, takže zůstává ostré.

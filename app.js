@@ -96,8 +96,6 @@ function bbox(o) {
   const xs = o.p.filter((_, i) => i % 2 === 0), ys = o.p.filter((_, i) => i % 2), r = o.w / 2 + 1;
   return [Math.min(...xs) - r, Math.min(...ys) - r, Math.max(...xs) + r, Math.max(...ys) + r];
 }
-// add an eraser stroke to every object it touches
-const cutAll = (objs, e) => objs.map(o => o.t !== 'erase' && touches_(o, e) ? { ...o, x: [...(o.x || []), e] } : o);
 function touches_(o, e) {
   const p = e.p, r = e.w / 2;
   if (p.length === 2) return hit(o, p[0], p[1], r);
@@ -108,10 +106,87 @@ function touches_(o, e) {
   }
   return false;
 }
-// version 2 stored partial erases as loose strokes on the page; fold them into the objects drawn before them
-function foldErases(objs) {
+
+// ---------- partial eraser: split shapes, keep a pixel cut only where the eraser merely grazes ----------
+const STEP = 0.3; // mm between samples of a split shape
+function centerline(o) { // dense points along the path exactly as drawShape draws it
+  const p = o.p, out = [p[0], p[1]];
+  const lin = (ax, ay, bx, by) => {
+    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / STEP));
+    for (let k = 1; k <= n; k++) out.push(ax + (bx - ax) * k / n, ay + (by - ay) * k / n);
+  };
+  if (o.t === 'rect') { lin(p[0], p[1], p[2], p[1]); lin(p[2], p[1], p[2], p[3]); lin(p[2], p[3], p[0], p[3]); lin(p[0], p[3], p[0], p[1]); return out; }
+  if (o.t !== 'pen') { for (let i = 2; i < p.length; i += 2) lin(p[i - 2], p[i - 1], p[i], p[i + 1]); return out; }
+  let x = p[0], y = p[1];
+  for (let i = 2; i < p.length - 2; i += 2) {
+    const cx = p[i], cy = p[i + 1], ex = (p[i] + p[i + 2]) / 2, ey = (p[i + 1] + p[i + 3]) / 2;
+    const n = Math.max(1, Math.ceil((Math.hypot(cx - x, cy - y) + Math.hypot(ex - cx, ey - cy)) / STEP));
+    for (let k = 1; k <= n; k++) { const t = k / n, u = 1 - t; out.push(u * u * x + 2 * u * t * cx + t * t * ex, u * u * y + 2 * u * t * cy + t * t * ey); }
+    x = ex; y = ey;
+  }
+  if (p.length >= 4) lin(x, y, p[p.length - 2], p[p.length - 1]);
+  return out;
+}
+function pathDist(x, y, p) {
+  if (p.length === 2) return Math.hypot(x - p[0], y - p[1]);
+  let d = Infinity;
+  for (let i = 0; i < p.length - 2; i += 2) d = Math.min(d, segDist(x, y, p[i], p[i + 1], p[i + 2], p[i + 3]));
+  return d;
+}
+function eraseFrom(o, e) {
+  if (o.t === 'erase' || !touches_(o, e)) return [o];
+  const withCut = () => [{ ...o, x: [...(o.x || []), e] }];
+  if (o.t === 'text') return withCut();
+  const s = centerline(o), n = s.length / 2, r = e.w / 2, h = o.w / 2, eb = bbox({ p: e.p, w: e.w + o.w });
+  const full = [], touched = [];
+  for (let i = 0; i < n; i++) {
+    const x = s[2 * i], y = s[2 * i + 1];
+    if (x < eb[0] || x > eb[2] || y < eb[1] || y > eb[3]) { full.push(false); touched.push(false); continue; }
+    // check the centre and both edges of the line's cross-section
+    const a = Math.max(0, i - 1), b = Math.min(n - 1, i + 1);
+    let nx = s[2 * a + 1] - s[2 * b + 1], ny = s[2 * b] - s[2 * a];
+    const l = Math.hypot(nx, ny) || 1; nx *= h / l; ny *= h / l;
+    const d = [pathDist(x, y, e.p), pathDist(x + nx, y + ny, e.p), pathDist(x - nx, y - ny, e.p)];
+    full.push(d.every(v => v <= r)); touched.push(d.some(v => v <= r));
+  }
+  // a touched stretch that the eraser cuts through somewhere disappears; a stretch it only grazes stays with a pixel cut
+  const gone = new Array(n).fill(false);
+  for (let i = 0; i < n;) {
+    if (!touched[i]) { i++; continue; }
+    let j = i, through = false;
+    for (; j < n && touched[j]; j++) if (full[j]) through = true;
+    if (through) gone.fill(true, i, j);
+    i = j;
+  }
+  if (!gone.includes(true)) return withCut();
+  // pull new ends back by half the line width, so the round caps don't reach into the erased gap
+  const m = Math.round(h / STEP), cutEnd = gone.slice();
+  for (let i = 0; i < n; i++) if (cutEnd[i]) for (let k = Math.max(0, i - m); k <= Math.min(n - 1, i + m); k++) gone[k] = true;
+  const pieces = [];
+  let piece = null;
+  for (let i = 0; i < n; i++) {
+    if (gone[i]) { piece = null; continue; }
+    if (!piece) pieces.push(piece = { t: 'poly', c: o.c, w: o.w, p: [], graze: false });
+    piece.p.push(s[2 * i], s[2 * i + 1]);
+    piece.graze ||= touched[i];
+  }
+  return pieces.filter(q => q.p.length >= 4).map(({ graze, ...q }) => {
+    const x = (o.x || []).filter(c => touches_(q, c));
+    if (graze) x.push(e);
+    return x.length ? { ...q, x } : q;
+  });
+}
+const applyErase = (objs, e) => objs.flatMap(o => eraseFrom(o, e));
+// older versions kept partial erases as loose page strokes (v2) or as pixel cuts on whole shapes (v3)
+function upgradePage(objs) {
   let out = [];
-  for (const o of objs) out = o.t === 'erase' ? cutAll(out, o) : [...out, o];
+  for (const o of objs) {
+    if (o.t === 'erase') { out = applyErase(out, o); continue; }
+    if (!o.x || o.t === 'text') { out.push(o); continue; }
+    let parts = [{ ...o, x: undefined }];
+    for (const e of o.x) parts = applyErase(parts, e);
+    out.push(...parts.map(({ x, ...q }) => x ? { ...q, x } : q));
+  }
   return out;
 }
 function drawShape(ctx, o) {
@@ -130,6 +205,7 @@ function drawShape(ctx, o) {
   ctx.globalCompositeOperation = o.t === 'erase' ? 'destination-out' : 'source-over';
   ctx.beginPath();
   if (o.t === 'rect') ctx.rect(p[0], p[1], p[2] - p[0], p[3] - p[1]);
+  else if (o.t === 'poly') { ctx.moveTo(p[0], p[1]); for (let i = 2; i < p.length; i += 2) ctx.lineTo(p[i], p[i + 1]); }
   else {
     ctx.moveTo(p[0], p[1]);
     if (p.length === 2) ctx.lineTo(p[0] + 0.001, p[1]); // a tap leaves a dot
@@ -318,7 +394,7 @@ function up(e) {
   if (!act || e.pointerId !== act.id) return;
   const a = act; act = null; showLive(null);
   const p = a.o?.p;
-  if (a.o?.t === 'erase') commit(() => { P.pages[cur] = cutAll(P.pages[cur], a.o); });
+  if (a.o?.t === 'erase') commit(() => { P.pages[cur] = applyErase(P.pages[cur], a.o); });
   else if (a.t === 'pen') commit(() => P.pages[cur].push(a.o));
   else if (a.t === 'line' && Math.hypot(p[2] - p[0], p[3] - p[1]) > 0.5) commit(() => P.pages[cur].push(a.o));
   else if (a.t === 'rect' && Math.abs(p[2] - p[0]) > 0.5 && Math.abs(p[3] - p[1]) > 0.5)
@@ -447,7 +523,7 @@ $('#delpage').onclick = async () => {
 // ---------- projects ----------
 function openProject(p) {
   P = p; cur = 0; undo = []; redo = [];
-  if (p.pages.some(pg => pg.some(o => o.t === 'erase'))) { p.pages = p.pages.map(foldErases); save(); }
+  if (p.v !== 4) { p.pages = p.pages.map(upgradePage); p.v = 4; save(); }
   $('#home').hidden = true; $('#editor').hidden = false;
   $('#title').textContent = p.name;
   buildSizes(); updateUI(); fit();
@@ -500,7 +576,7 @@ $('#new').onclick = async () => {
   const { v, f } = await modal('Nový projekt', html, [['Zrušit', ''], ['Vytvořit', 'ok', 'primary']], f => { f.elements.title.value = 'Nový komiks'; });
   if (v !== 'ok') return;
   const s = f.elements.size.value, [w, h] = s === 'c' ? [+f.elements.w.value, +f.elements.h.value] : PRESETS[s].slice(1);
-  const p = { id: newId(), name: f.elements.title.value.trim() || 'Nový komiks', w, h, pages: [[]], updated: Date.now() };
+  const p = { id: newId(), name: f.elements.title.value.trim() || 'Nový komiks', w, h, pages: [[]], v: 4, updated: Date.now() };
   if (await store(p)) openProject(p);
 };
 
@@ -508,7 +584,7 @@ $('#new').onclick = async () => {
 function validProject(d) {
   const num = v => typeof v === 'number' && isFinite(v);
   const okErase = e => e && e.t === 'erase' && Array.isArray(e.p) && e.p.length >= 2 && e.p.length % 2 === 0 && e.p.every(num) && num(e.w) && e.w > 0;
-  const okObj = o => o && ['pen', 'line', 'rect', 'text', 'erase'].includes(o.t) && typeof o.c === 'string' && Array.isArray(o.p) &&
+  const okObj = o => o && ['pen', 'line', 'rect', 'poly', 'text', 'erase'].includes(o.t) && typeof o.c === 'string' && Array.isArray(o.p) &&
     o.p.length >= 2 && o.p.length % 2 === 0 && o.p.every(num) && (o.t === 'text' ? typeof o.text === 'string' && num(o.s) && o.s > 0 : num(o.w) && o.w > 0) &&
     (o.x === undefined || Array.isArray(o.x) && o.x.every(okErase));
   return d && typeof d.name === 'string' && num(d.w) && num(d.h) && d.w > 0 && d.h > 0 &&
