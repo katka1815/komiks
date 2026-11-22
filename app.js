@@ -6,11 +6,15 @@ const PRESETS = [['A4 na výšku', 210, 297], ['A4 na šířku', 297, 210], ['A5
 const COLORS = ['#000000', '#666666', '#ffffff', '#d62828', '#f77f00', '#fcbf49', '#2a9d8f', '#1d4ed8', '#7b2cbf', '#8b5a2b'];
 const WIDTHS = [0.35, 0.7, 1.4, 2.8];   // mm
 const TEXT_SIZES = [4, 6, 9, 14];        // mm
+const ERASE_WIDTHS = [2, 5, 10, 20];     // mm
 const FONT = '-apple-system, "Helvetica Neue", Arial, sans-serif';
 const EXPORT_DPI = 200, MAX_PX = 15e6;   // iOS Safari refuses canvases above ~16.7 Mpx
 const pagesWord = n => n === 1 ? 'strana' : n >= 2 && n <= 4 ? 'strany' : 'stran';
 
-const st = { tool: 'pen', color: '#000000', width: 0.7, textSize: 6, pencilOnly: localStorage.getItem('pencilOnly') !== '0' };
+const st = {
+  tool: 'pen', color: '#000000', width: 0.7, textSize: 6, eraseWidth: 5,
+  eraseMode: localStorage.getItem('eraseMode') || 'part', pencilOnly: localStorage.getItem('pencilOnly') !== '0',
+};
 let P = null, cur = 0, undo = [], redo = [], pending = null, scale = 1, act = null, textEdit = null, needReload = false;
 const base = $('#base'), live = $('#live'), bctx = base.getContext('2d'), lctx = live.getContext('2d');
 const mctx = document.createElement('canvas').getContext('2d'), ta = $('#ta');
@@ -80,6 +84,8 @@ function drawObj(ctx, o) {
     return;
   }
   ctx.lineWidth = o.w; ctx.lineCap = ctx.lineJoin = 'round';
+  // eraser strokes punch holes into everything drawn before them
+  ctx.globalCompositeOperation = o.t === 'erase' ? 'destination-out' : 'source-over';
   ctx.beginPath();
   if (o.t === 'rect') ctx.rect(p[0], p[1], p[2] - p[0], p[3] - p[1]);
   else {
@@ -89,12 +95,17 @@ function drawObj(ctx, o) {
     if (p.length >= 4) ctx.lineTo(p[p.length - 2], p[p.length - 1]);
   }
   ctx.stroke();
+  ctx.globalCompositeOperation = 'source-over';
 }
+// export + thumbnails: objects on transparent, then white paper slid underneath (so erased spots end up white)
 function paint(ctx, objs, k, W, H) {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, W, H);
   ctx.setTransform(k, 0, 0, k, 0, 0);
   for (const o of objs) drawObj(ctx, o);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'destination-over';
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'source-over';
 }
 function renderPage(proj, objs, k) {
   const c = document.createElement('canvas');
@@ -102,23 +113,63 @@ function renderPage(proj, objs, k) {
   paint(c.getContext('2d'), objs, k, c.width, c.height);
   return c;
 }
-const redraw = () => paint(bctx, P.pages[cur], base.width / P.w, base.width, base.height);
-function showLive(o) {
-  lctx.setTransform(1, 0, 0, 1, 0, 0); lctx.clearRect(0, 0, live.width, live.height);
-  if (o) { const k = live.width / P.w; lctx.setTransform(k, 0, 0, k, 0, 0); drawObj(lctx, o); }
+// editor view: canvases cover the whole stage, page sits at (ox, oy) with `scale` CSS px per mm.
+// Canvases stay transparent; the white #paper div shows through erased spots.
+function viewCtx(ctx) {
+  const d = devicePixelRatio || 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.setTransform(d * scale, 0, 0, d * scale, d * ox, d * oy);
 }
+function redraw() {
+  viewCtx(bctx);
+  bctx.save(); bctx.beginPath(); bctx.rect(0, 0, P.w, P.h); bctx.clip();
+  for (const o of P.pages[cur]) drawObj(bctx, o);
+  bctx.restore();
+}
+function showLive(o) { viewCtx(lctx); if (o) drawObj(lctx, o); }
 
-function fit() {
-  if (!P) return;
-  const s = $('#stage'), aw = s.clientWidth - 24, ah = s.clientHeight - 24;
-  if (aw <= 0 || ah <= 0) return;
-  scale = Math.min(aw / P.w, ah / P.h);
-  const dpr = devicePixelRatio || 1, paper = $('#paper');
-  paper.style.width = P.w * scale + 'px'; paper.style.height = P.h * scale + 'px';
-  for (const c of [base, live]) { c.width = Math.round(P.w * scale * dpr); c.height = Math.round(P.h * scale * dpr); }
+const stage = $('#stage');
+let fitScale = 1, ox = 0, oy = 0;
+function applyView() {
+  Object.assign($('#paper').style, { left: ox + 'px', top: oy + 'px', width: P.w * scale + 'px', height: P.h * scale + 'px' });
   redraw(); styleText();
 }
-new ResizeObserver(fit).observe($('#stage'));
+function fit() {
+  if (!P) return;
+  const W = stage.clientWidth, H = stage.clientHeight, d = devicePixelRatio || 1;
+  if (W <= 0 || H <= 0) return;
+  for (const c of [base, live]) { c.width = Math.round(W * d); c.height = Math.round(H * d); }
+  fitScale = scale = Math.min((W - 24) / P.w, (H - 24) / P.h);
+  ox = (W - P.w * scale) / 2; oy = (H - P.h * scale) / 2;
+  applyView();
+}
+new ResizeObserver(fit).observe(stage);
+
+// finger gestures: two fingers zoom + pan; with "Jen Pencil" one finger pans too
+const touches = new Map();
+function gestureMove(e) {
+  const before = [...touches.values()];
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  const after = [...touches.values()];
+  if (act && !act.touch) return; // never shift the page under a Pencil stroke
+  if (after.length >= 2) {
+    const c = ps => [(ps[0].x + ps[1].x) / 2, (ps[0].y + ps[1].y) / 2], dist = ps => Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y) || 1;
+    const [c0, c1] = [c(before), c(after)], r = stage.getBoundingClientRect();
+    const s1 = Math.min(fitScale * 8, Math.max(fitScale, scale * dist(after) / dist(before)));
+    // keep the page point under the fingers' midpoint under it after zooming
+    ox = c1[0] - r.left - (c0[0] - r.left - ox) / scale * s1;
+    oy = c1[1] - r.top - (c0[1] - r.top - oy) / scale * s1;
+    scale = s1;
+  } else { ox += after[0].x - before[0].x; oy += after[0].y - before[0].y; }
+  const W = stage.clientWidth, H = stage.clientHeight;
+  ox = Math.min(W / 2, Math.max(W / 2 - P.w * scale, ox));
+  oy = Math.min(H / 2, Math.max(H / 2 - P.h * scale, oy));
+  applyView();
+}
+function cancelAct() {
+  if (pending) { P.pages = pending.pages; cur = pending.cur; pending = null; }
+  act = null; showLive(null); redraw();
+}
 
 // ---------- hit testing ----------
 function segDist(x, y, ax, ay, bx, by) {
@@ -141,7 +192,7 @@ function hit(o, x, y, tol) {
 }
 function topHit(x, y, only) {
   const a = P.pages[cur], tol = 10 / scale;
-  for (let i = a.length - 1; i >= 0; i--) if ((!only || a[i].t === only) && hit(a[i], x, y, tol)) return i;
+  for (let i = a.length - 1; i >= 0; i--) if (a[i].t !== 'erase' && (!only || a[i].t === only) && hit(a[i], x, y, tol)) return i;
   return -1;
 }
 const moved = (o, dx, dy) => ({ ...o, p: o.p.map((v, i) => v + (i % 2 ? dy : dx)) });
@@ -165,33 +216,37 @@ $('#undo').onclick = () => { finishText(true); if (act || !undo.length) return; 
 $('#redo').onclick = () => { finishText(true); if (act || !redo.length) return; undo.push(snap()); restore(redo.pop()); };
 
 // ---------- pointer input ----------
-const pos = (e, r) => [(e.clientX - r.left) / scale, (e.clientY - r.top) / scale];
+const pos = (e, r) => [(e.clientX - r.left - ox) / scale, (e.clientY - r.top - oy) / scale];
 function erase(x, y) {
-  const a = P.pages[cur], b = a.filter(o => !hit(o, x, y, 8 / scale));
+  const a = P.pages[cur], b = a.filter(o => o.t === 'erase' || !hit(o, x, y, 8 / scale));
   if (b.length !== a.length) { P.pages[cur] = b; act.changed = true; redraw(); }
 }
 live.addEventListener('pointerdown', e => {
-  if (textEdit) { finishText(true); return; }
-  if (act || (st.pencilOnly && e.pointerType === 'touch')) return;
   e.preventDefault();
+  if (e.pointerType === 'touch') {
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (st.pencilOnly || touches.size > 1) { if (act?.touch) cancelAct(); return; }
+  }
+  if (textEdit) { finishText(true); return; }
+  if (act) return;
   live.setPointerCapture(e.pointerId);
   const r = live.getBoundingClientRect(), [x, y] = pos(e, r), t = st.tool;
-  act = { id: e.pointerId, t, r, x0: x, y0: y };
+  act = { id: e.pointerId, touch: e.pointerType === 'touch', t, r, x0: x, y0: y };
   if (t === 'pen') act.o = { t, c: st.color, w: st.width, p: [x, y] };
   else if (t === 'line' || t === 'rect') act.o = { t, c: st.color, w: st.width, p: [x, y, x, y] };
   else if (t === 'move') {
     const i = topHit(x, y);
     if (i < 0) { act = null; return; }
     begin(); act.i = i; act.orig = P.pages[cur][i];
-  } else if (t === 'erase') { begin(); erase(x, y); }
-  showLive(act.o);
+  } else if (t === 'erase' && st.eraseMode === 'part') act.o = { t: 'erase', c: '#000', w: st.eraseWidth, p: [x, y] };
+  else if (t === 'erase') { begin(); erase(x, y); }
+  move(e);
 });
-live.addEventListener('pointermove', e => {
-  if (!act || e.pointerId !== act.id) return;
+function move(e) {
   const evs = e.getCoalescedEvents?.() || [];
   for (const ev of evs.length ? evs : [e]) {
     const [x, y] = pos(ev, act.r);
-    if (act.t === 'pen') {
+    if (act.t === 'pen' || act.o?.t === 'erase') {
       const p = act.o.p;
       if (Math.hypot(x - p[p.length - 2], y - p[p.length - 1]) >= 0.15) p.push(x, y);
     } else if (act.t === 'erase') erase(x, y);
@@ -204,13 +259,23 @@ live.addEventListener('pointermove', e => {
     P.pages[cur][act.i] = moved(act.orig, x - act.x0, y - act.y0);
     redraw();
   }
-  showLive(act.o);
+  if (act.o?.t === 'erase') {
+    // erase straight on the base canvas for instant feedback, show the eraser size as a ring
+    drawObj(bctx, act.o);
+    viewCtx(lctx); lctx.lineWidth = 1 / scale; lctx.strokeStyle = '#888';
+    lctx.beginPath(); lctx.arc(x, y, act.o.w / 2, 0, 2 * Math.PI); lctx.stroke();
+  } else showLive(act.o);
+}
+live.addEventListener('pointermove', e => {
+  if (touches.has(e.pointerId) && !(act && act.id === e.pointerId)) return gestureMove(e);
+  if (act && e.pointerId === act.id) move(e);
 });
 function up(e) {
+  if (touches.delete(e.pointerId) && !touches.size && scale <= fitScale * 1.02) fit();
   if (!act || e.pointerId !== act.id) return;
   const a = act; act = null; showLive(null);
   const p = a.o?.p;
-  if (a.t === 'pen') commit(() => P.pages[cur].push(a.o));
+  if (a.t === 'pen' || a.o?.t === 'erase') commit(() => P.pages[cur].push(a.o));
   else if (a.t === 'line' && Math.hypot(p[2] - p[0], p[3] - p[1]) > 0.5) commit(() => P.pages[cur].push(a.o));
   else if (a.t === 'rect' && Math.abs(p[2] - p[0]) > 0.5 && Math.abs(p[3] - p[1]) > 0.5)
     commit(() => P.pages[cur].push({ ...a.o, p: [Math.min(p[0], p[2]), Math.min(p[1], p[3]), Math.max(p[0], p[2]), Math.max(p[1], p[3])] }));
@@ -271,16 +336,27 @@ for (const b of document.querySelectorAll('#tools button')) b.onclick = () => {
   buildSizes();
 };
 function buildSizes() {
-  const isText = st.tool === 'text', list = isText ? TEXT_SIZES : WIDTHS, value = isText ? st.textSize : st.width;
-  $('#sizes').hidden = st.tool === 'move' || st.tool === 'erase';
-  $('#sizes').replaceChildren(...list.map((v, i) => {
-    const b = el('button', v === value ? 'on' : '');
-    b.setAttribute('aria-label', (isText ? 'Písmo ' : 'Tloušťka ') + String(v).replace('.', ',') + ' mm');
-    if (isText) { const s = el('span', '', 'A'); s.style.fontSize = 11 + i * 5 + 'px'; b.append(s); }
-    else { const d = el('span', 'dot'); d.style.width = d.style.height = Math.min(22, 3 + v * 6) + 'px'; b.append(d); }
-    b.onclick = () => { if (isText) st.textSize = v; else st.width = v; buildSizes(); styleText(); };
-    return b;
-  }));
+  const t = st.tool, box = $('#sizes'), items = [];
+  box.hidden = t === 'move';
+  if (t === 'erase') for (const [m, label] of [['part', 'Část'], ['whole', 'Celé tahy']]) {
+    const b = el('button', 'mode' + (st.eraseMode === m ? ' on' : ''), label);
+    b.onclick = () => { st.eraseMode = m; localStorage.setItem('eraseMode', m); buildSizes(); };
+    items.push(b);
+  }
+  if (t !== 'erase' || st.eraseMode === 'part') {
+    const key = t === 'text' ? 'textSize' : t === 'erase' ? 'eraseWidth' : 'width';
+    const list = t === 'text' ? TEXT_SIZES : t === 'erase' ? ERASE_WIDTHS : WIDTHS;
+    const what = t === 'text' ? 'Písmo ' : t === 'erase' ? 'Tloušťka gumy ' : 'Tloušťka ';
+    list.forEach((v, i) => {
+      const b = el('button', v === st[key] ? 'on' : '');
+      b.setAttribute('aria-label', what + String(v).replace('.', ',') + ' mm');
+      if (t === 'text') { const s = el('span', '', 'A'); s.style.fontSize = 11 + i * 5 + 'px'; b.append(s); }
+      else { const d = el('span', 'dot'); d.style.width = d.style.height = [4, 7, 11, 18][i] + 'px'; b.append(d); }
+      b.onclick = () => { st[key] = v; buildSizes(); styleText(); };
+      items.push(b);
+    });
+  }
+  box.replaceChildren(...items);
 }
 const colorBox = $('#colors'), custom = el('label', 'sw custom'), picker = el('input');
 picker.type = 'color'; picker.setAttribute('aria-label', 'Vlastní barva'); custom.append(picker);
@@ -386,7 +462,7 @@ $('#new').onclick = async () => {
 // backup import: the file comes from outside, so check every field we later draw
 function validProject(d) {
   const num = v => typeof v === 'number' && isFinite(v);
-  const okObj = o => o && ['pen', 'line', 'rect', 'text'].includes(o.t) && typeof o.c === 'string' && Array.isArray(o.p) &&
+  const okObj = o => o && ['pen', 'line', 'rect', 'text', 'erase'].includes(o.t) && typeof o.c === 'string' && Array.isArray(o.p) &&
     o.p.length >= 2 && o.p.length % 2 === 0 && o.p.every(num) && (o.t === 'text' ? typeof o.text === 'string' && num(o.s) && o.s > 0 : num(o.w) && o.w > 0);
   return d && typeof d.name === 'string' && num(d.w) && num(d.h) && d.w > 0 && d.h > 0 &&
     Array.isArray(d.pages) && d.pages.length > 0 && d.pages.every(pg => Array.isArray(pg) && pg.every(okObj));
