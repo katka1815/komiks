@@ -26,13 +26,14 @@ Všechno je v milimetrech, takže kresba sedí při každé velikosti obrazovky 
 Projekt { id, name, w, h, pages: [[objekt…], …], updated }
 objekt  { t: 'pen' | 'line' | 'rect', c: barva, w: tloušťka, p: [x, y, x, y…] }
         { t: 'text', c: barva, s: velikost písma, p: [x, y], text }
-        { t: 'erase', w: tloušťka gumy, p: [x, y…] }
+        každý objekt může mít x: [{ t: 'erase', w: tloušťka gumy, p: [x, y…] }, …]
 ```
 
-Guma má dva režimy. „Celé tahy“ smaže celé objekty, kterých se dotkne. „Část“ uloží
-tah gumy (`erase`), který při vykreslení vymaže pixely všeho, co bylo nakreslené před
-ním (`destination-out`). Funguje tak na čáry, obdélníky i text a platí i v exportu.
-Omezení: když potom posuneš objekt, díra z gumy zůstane na původním místě stránky.
+Guma má dva režimy. „Celé tahy“ smaže celé objekty, kterých se dotkne. „Část“ přidá
+tah gumy do `x` každého objektu, kterého se dotkne. Objekt se pak kreslí zvlášť na
+pomocnou vrstvu, kde se vygumovaná místa vyříznou (`destination-out`). Funguje to na
+čáry, obdélníky i text, platí to i v exportu a díra se při posunu posune s objektem.
+Verze 2 ukládala tahy gumy volně na stránku. Při otevření projektu se převedou do objektů.
 
 Zoom: dvěma prsty se přibližuje, oddaluje a posouvá. Při zapnutém „Jen Pencil“ posouvá
 stránku i jeden prst. Plátno se při zoomu znovu vykreslí z vektorů, takže zůstává ostré.

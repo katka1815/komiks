@@ -72,7 +72,49 @@ function modal(title, html, buttons, init) {
 const confirmDel = async msg => (await modal(msg, '', [['Zrušit', ''], ['Smazat', 'y', 'danger']])).v === 'y';
 
 // ---------- drawing (all in mm) ----------
+// Partial erases live on the object they hit (o.x), so the holes move with it.
+// Such an object is drawn alone on a scratch layer, the holes are punched there, then copied over.
+const scratch = document.createElement('canvas');
 function drawObj(ctx, o) {
+  if (!o.x?.length) return drawShape(ctx, o);
+  const W = ctx.canvas.width, H = ctx.canvas.height, m = ctx.getTransform(), b = bbox(o);
+  const x0 = Math.max(0, Math.floor(m.a * b[0] + m.e)), y0 = Math.max(0, Math.floor(m.d * b[1] + m.f));
+  const x1 = Math.min(W, Math.ceil(m.a * b[2] + m.e)), y1 = Math.min(H, Math.ceil(m.d * b[3] + m.f));
+  if (x1 <= x0 || y1 <= y0) return;
+  if (scratch.width !== W || scratch.height !== H) { scratch.width = W; scratch.height = H; }
+  const s = scratch.getContext('2d');
+  s.setTransform(1, 0, 0, 1, 0, 0); s.clearRect(x0, y0, x1 - x0, y1 - y0);
+  s.setTransform(m);
+  drawShape(s, o);
+  for (const e of o.x) drawShape(s, e);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(scratch, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+  ctx.restore();
+}
+function bbox(o) {
+  if (o.t === 'text') return textBox(o);
+  const xs = o.p.filter((_, i) => i % 2 === 0), ys = o.p.filter((_, i) => i % 2), r = o.w / 2 + 1;
+  return [Math.min(...xs) - r, Math.min(...ys) - r, Math.max(...xs) + r, Math.max(...ys) + r];
+}
+// add an eraser stroke to every object it touches
+const cutAll = (objs, e) => objs.map(o => o.t !== 'erase' && touches_(o, e) ? { ...o, x: [...(o.x || []), e] } : o);
+function touches_(o, e) {
+  const p = e.p, r = e.w / 2;
+  if (p.length === 2) return hit(o, p[0], p[1], r);
+  // walk each eraser segment in steps of r/2, fast strokes have far-apart points
+  for (let i = 0; i < p.length - 2; i += 2) {
+    const n = Math.max(1, Math.ceil(Math.hypot(p[i + 2] - p[i], p[i + 3] - p[i + 1]) / (r / 2)));
+    for (let k = 0; k <= n; k++) if (hit(o, p[i] + (p[i + 2] - p[i]) * k / n, p[i + 1] + (p[i + 3] - p[i + 1]) * k / n, r)) return true;
+  }
+  return false;
+}
+// version 2 stored partial erases as loose strokes on the page; fold them into the objects drawn before them
+function foldErases(objs) {
+  let out = [];
+  for (const o of objs) out = o.t === 'erase' ? cutAll(out, o) : [...out, o];
+  return out;
+}
+function drawShape(ctx, o) {
   const p = o.p;
   ctx.strokeStyle = ctx.fillStyle = o.c;
   if (o.t === 'text') {
@@ -195,7 +237,7 @@ function topHit(x, y, only) {
   for (let i = a.length - 1; i >= 0; i--) if (a[i].t !== 'erase' && (!only || a[i].t === only) && hit(a[i], x, y, tol)) return i;
   return -1;
 }
-const moved = (o, dx, dy) => ({ ...o, p: o.p.map((v, i) => v + (i % 2 ? dy : dx)) });
+const moved = (o, dx, dy) => ({ ...o, p: o.p.map((v, i) => v + (i % 2 ? dy : dx)), ...(o.x && { x: o.x.map(e => moved(e, dx, dy)) }) });
 function snapLine(x0, y0, x, y) {
   const a = Math.abs(Math.atan2(y - y0, x - x0)) * 180 / Math.PI; // 0..180
   if (a < 5 || a > 175) return [x, y0];
@@ -239,7 +281,6 @@ live.addEventListener('pointerdown', e => {
     if (i < 0) { act = null; return; }
     begin(); act.i = i; act.orig = P.pages[cur][i];
   }
-  // shortcut: a partial erase is its own stroke, so an object moved later keeps its holes in place; split shapes if that bothers
   else if (t === 'erase' && st.eraseMode === 'part') act.o = { t: 'erase', c: '#000', w: st.eraseWidth, p: [x, y] };
   else if (t === 'erase') { begin(); erase(x, y); }
   move(e);
@@ -277,7 +318,8 @@ function up(e) {
   if (!act || e.pointerId !== act.id) return;
   const a = act; act = null; showLive(null);
   const p = a.o?.p;
-  if (a.t === 'pen' || a.o?.t === 'erase') commit(() => P.pages[cur].push(a.o));
+  if (a.o?.t === 'erase') commit(() => { P.pages[cur] = cutAll(P.pages[cur], a.o); });
+  else if (a.t === 'pen') commit(() => P.pages[cur].push(a.o));
   else if (a.t === 'line' && Math.hypot(p[2] - p[0], p[3] - p[1]) > 0.5) commit(() => P.pages[cur].push(a.o));
   else if (a.t === 'rect' && Math.abs(p[2] - p[0]) > 0.5 && Math.abs(p[3] - p[1]) > 0.5)
     commit(() => P.pages[cur].push({ ...a.o, p: [Math.min(p[0], p[2]), Math.min(p[1], p[3]), Math.max(p[0], p[2]), Math.max(p[1], p[3])] }));
@@ -405,6 +447,7 @@ $('#delpage').onclick = async () => {
 // ---------- projects ----------
 function openProject(p) {
   P = p; cur = 0; undo = []; redo = [];
+  if (p.pages.some(pg => pg.some(o => o.t === 'erase'))) { p.pages = p.pages.map(foldErases); save(); }
   $('#home').hidden = true; $('#editor').hidden = false;
   $('#title').textContent = p.name;
   buildSizes(); updateUI(); fit();
@@ -464,8 +507,10 @@ $('#new').onclick = async () => {
 // backup import: the file comes from outside, so check every field we later draw
 function validProject(d) {
   const num = v => typeof v === 'number' && isFinite(v);
+  const okErase = e => e && e.t === 'erase' && Array.isArray(e.p) && e.p.length >= 2 && e.p.length % 2 === 0 && e.p.every(num) && num(e.w) && e.w > 0;
   const okObj = o => o && ['pen', 'line', 'rect', 'text', 'erase'].includes(o.t) && typeof o.c === 'string' && Array.isArray(o.p) &&
-    o.p.length >= 2 && o.p.length % 2 === 0 && o.p.every(num) && (o.t === 'text' ? typeof o.text === 'string' && num(o.s) && o.s > 0 : num(o.w) && o.w > 0);
+    o.p.length >= 2 && o.p.length % 2 === 0 && o.p.every(num) && (o.t === 'text' ? typeof o.text === 'string' && num(o.s) && o.s > 0 : num(o.w) && o.w > 0) &&
+    (o.x === undefined || Array.isArray(o.x) && o.x.every(okErase));
   return d && typeof d.name === 'string' && num(d.w) && num(d.h) && d.w > 0 && d.h > 0 &&
     Array.isArray(d.pages) && d.pages.length > 0 && d.pages.every(pg => Array.isArray(pg) && pg.every(okObj));
 }
@@ -492,7 +537,7 @@ async function pdfFile(idx, name) {
     expMsg(`Stránka ${n + 1}/${idx.length}…`);
     const c = renderPage(P, P.pages[i], k);
     try { w.addPage(await toBlob(c, 'image/jpeg', 0.92), c.width, c.height, P.w, P.h); }
-    finally { c.width = c.height = 0; } // free canvas memory right away, Safari kills the tab otherwise
+    finally { c.width = c.height = scratch.width = scratch.height = 0; } // free canvas memory right away, Safari kills the tab otherwise
   }
   return new File([w.finish()], name, { type: 'application/pdf' });
 }
@@ -506,7 +551,7 @@ async function makeFile(kind) {
   try {
     const b = await toBlob(c, kind === 'png' ? 'image/png' : 'image/jpeg', 0.92);
     return new File([b], `${pg}.${kind}`, { type: b.type });
-  } finally { c.width = c.height = 0; }
+  } finally { c.width = c.height = scratch.width = scratch.height = 0; }
 }
 function download(file) {
   const a = el('a'); a.href = URL.createObjectURL(file); a.download = file.name;
