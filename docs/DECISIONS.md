@@ -2,6 +2,26 @@
 
 Nejnovější nahoře. Ke každé změně: co, proč a co zůstává otevřené.
 
+## 2026-11-23: Plynulá tloušťka pera a gumy od 0,1 mm (`komiks-v7`)
+
+- Místo čtyř pevných velikostí je teď posuvník s tlačítky − a + a číslem v mm. Pero, čára
+  a obdélník jdou od 0,1 do 10 mm, guma od 0,1 do 40 mm. Velikosti textu zůstaly jako
+  tlačítka.
+- 0,1 mm je zhruba 1 pixel exportu ve 200 DPI (0,127 mm). Tloušťka je pořád v mm, ne
+  v pixelech obrazovky, aby kresba seděla při každém zoomu i v exportu.
+- Posuvník je logaritmický, takže tenké velikosti zabírají většinu jeho délky.
+  Tloušťky si appka pamatuje v `localStorage`.
+- Puntík ukazuje skutečnou tloušťku při aktuálním zoomu, nejméně ale 2 px, aby byl vidět.
+- Tenká guma by se starým výpočtem (kroky podle šířky gumy) dělila velmi pomalu. Proto:
+  - dotyk se počítá úsečka proti úsečce,
+  - jemné vzorkování je jen v okolí gumy,
+  - kousky se zjednoduší (Douglas–Peucker). Bez toho měla čára po 0,1mm gumě přes
+    2000 bodů, teď má 2.
+- Guma tenčí než čára čáru nerozdělí, ale dá na ni ořez. Rozdělení by tam nechalo dva
+  kulaté konce vedle sebe a čára by vypadala přiškrcená.
+- Dokument (`touch-action`) blokoval posun prstem na posuvníku, proto je `input`
+  vyjmutý z blokování.
+
 ## 2026-11-23: Heslo u každého souboru zvlášť (`komiks-v6`)
 
 - Při „Do schránky“ se appka zeptá na heslo k tomu jednomu souboru. Prázdné pole znamená

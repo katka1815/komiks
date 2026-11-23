@@ -21,14 +21,17 @@ výšku, čtverec nebo vlastní rozměr v mm). U každého projektu je Otevřít
 Duplikovat a Smazat. Všechno se ukládá samo.
 
 **Nástroje** (lišta vlevo):
-- **Pero:** volná čára. Tloušťku vybereš ze čtyř velikostí.
+- **Pero:** volná čára. Tloušťku nastavíš posuvníkem od 0,1 mm (asi 1 pixel v exportu) do
+  10 mm. Tlačítky − a + ji jemně doladíš. Puntík nad posuvníkem ukazuje tloušťku tak, jak
+  vypadá při aktuálním zoomu, pod ním je číslo v mm. Čára a Obdélník používají stejnou
+  tloušťku. Appka si ji pamatuje.
 - **Čára:** rovná čára z bodu A do B. Do 5° od vodorovné nebo svislé se srovná.
 - **Obdélník:** na rámečky panelů.
 - **Text:** ťukni na místo, napiš text a dej OK. Ťuknutím na existující text ho upravíš.
   Když text smažeš celý, zmizí.
 - **Posun:** chyť objekt a přesuň ho.
 - **Guma** má dva režimy:
-  - **Část** (tloušťka 2, 5, 10 nebo 20 mm) maže jen to, přes co přejedeš. Čára, tah
+  - **Část** (tloušťka posuvníkem od 0,1 do 40 mm) maže jen to, přes co přejedeš. Čára, tah
     perem nebo obdélník se v tom místě rozdělí na kousky.
   - **Celé tahy** smaže celé objekty (nebo kousky), kterých se dotkneš.
 - **Barvy:** deset základních a duhové pole pro vlastní barvu.
@@ -107,10 +110,18 @@ objekt  { t: 'pen' | 'line' | 'rect', c: barva, w: tloušťka, p: [x, y, x, y…
 - **Vstup:** pointer events + `getCoalescedEvents`. Pero, tužka i myš kreslí. Prst
   (`pointerType 'touch'`) jde do gest (`gestureMove`), pokud je zapnuté „Jen Pencil“ nebo
   jsou na displeji dva prsty.
-- **Guma „Část“** (`eraseFrom`): tvar se převede na hustou středovou čáru (`centerline`,
-  krok 0,3 mm). U každého bodu se kontroluje střed a oba okraje čáry. Úsek, který guma
-  přejede přes celou šířku, zmizí a konce se zkrátí o půl tloušťky, aby kulatý konec
-  nezasahoval do mezery. Úsek, který guma jen škrtne, dostane ořez `x`.
+- **Guma „Část“** (`eraseFrom`):
+  - Jestli se guma objektu dotkne, zjistí `touches_` porovnáním úseček gumy s úsečkami
+    objektu. Je to rychlé i pro 0,1mm gumu.
+  - Tvar se převede na středovou čáru (`centerline`). V okolí gumy má jemné kroky (třetina
+    menší z tlouštěk, nejvýš 0,3 mm), jinde hrubé.
+  - U každého bodu se kontroluje střed a oba okraje čáry. Úsek, který guma přejede přes
+    celou šířku, zmizí. Konce se zkrátí o půl tloušťky (měřeno po délce čáry), aby kulatý
+    konec nezasahoval do mezery.
+  - Kousky se zjednoduší (`simplify`, Douglas–Peucker s odchylkou 0,01 mm), takže rovný
+    kousek má zase jen 2 body.
+  - Úsek, který guma jen škrtne, text a guma tenčí než čára dostanou ořez `x`. U tenké gumy
+    přes silnou čáru by dva kulaté konce vedle sebe vypadaly jako přiškrcení.
 - **Export:** každá stránka se vykreslí do pomocného plátna v 200 DPI. Když by měla víc
   než 15 Mpx (limit iOS Safari je asi 16,7 Mpx), DPI se sníží. Plátno se hned uvolní
   (`width = 0`). JPEG obrázky jdou do `pdf.js` jako Bloby, takže ani 25 stran nezahltí
@@ -157,7 +168,7 @@ tlačítkem „Sdílet soubor“. Opravdové sdílení se dá vyzkoušet jen na 
 
 ## Nasazení nové verze
 
-1. V `sw.js` zvyš `VERSION` (teď `komiks-v4`). Bez toho by appka na ploše dál používala
+1. V `sw.js` zvyš `VERSION` (teď `komiks-v7`). Bez toho by appka na ploše dál používala
    staré soubory.
 2. `git commit` a `git push`. GitHub Pages to asi za minutu nasadí.
 3. V appce se nová verze načte, až se vrátíš na seznam projektů. Uprostřed kreslení se
@@ -175,3 +186,5 @@ tlačítkem „Sdílet soubor“. Opravdové sdílení se dá vyzkoušet jen na 
 - Text a čáry jen škrtnuté gumou po okraji si nesou pixelový ořez. Když jich je na stránce
   hodně, kreslení a zoom se můžou zpomalit.
 - Okraje mezery po gumě jsou kulaté jako konec čáry, ne podle tvaru gumy.
+- Čára 0,1 mm je při celé stránce na displeji jen slabě vidět (je tenčí než pixel displeje).
+  Po přiblížení i v exportu je vidět normálně.

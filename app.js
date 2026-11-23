@@ -4,15 +4,15 @@ const el = (tag, cls = '', text = '') => { const e = document.createElement(tag)
 
 const PRESETS = [['A4 na výšku', 210, 297], ['A4 na šířku', 297, 210], ['A5 na výšku', 148, 210], ['Čtverec', 200, 200]];
 const COLORS = ['#000000', '#666666', '#ffffff', '#d62828', '#f77f00', '#fcbf49', '#2a9d8f', '#1d4ed8', '#7b2cbf', '#8b5a2b'];
-const WIDTHS = [0.35, 0.7, 1.4, 2.8];   // mm
 const TEXT_SIZES = [4, 6, 9, 14];        // mm
-const ERASE_WIDTHS = [2, 5, 10, 20];     // mm
+const SIZE_RANGE = { width: [0.1, 10], eraseWidth: [0.1, 40] }; // mm; 0.1 mm ≈ 1 px of the 200 DPI export
 const FONT = '-apple-system, "Helvetica Neue", Arial, sans-serif';
 const EXPORT_DPI = 200, MAX_PX = 15e6;   // iOS Safari refuses canvases above ~16.7 Mpx
 const pagesWord = n => n === 1 ? 'strana' : n >= 2 && n <= 4 ? 'strany' : 'stran';
 
 const st = {
-  tool: 'pen', color: '#000000', width: 0.7, textSize: 6, eraseWidth: 5,
+  tool: 'pen', color: '#000000', textSize: 6,
+  width: +localStorage.getItem('width') || 0.7, eraseWidth: +localStorage.getItem('eraseWidth') || 5,
   eraseMode: localStorage.getItem('eraseMode') || 'part', pencilOnly: localStorage.getItem('pencilOnly') !== '0',
 };
 let P = null, cur = 0, undo = [], redo = [], pending = null, scale = 1, act = null, textEdit = null, needReload = false;
@@ -96,23 +96,38 @@ function bbox(o) {
   const xs = o.p.filter((_, i) => i % 2 === 0), ys = o.p.filter((_, i) => i % 2), r = o.w / 2 + 1;
   return [Math.min(...xs) - r, Math.min(...ys) - r, Math.max(...xs) + r, Math.max(...ys) + r];
 }
+const boxesMeet = (a, b) => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+function segSegDist(ax, ay, bx, by, cx, cy, dx, dy) {
+  const cr = (px, py, qx, qy, rx, ry) => (qx - px) * (ry - py) - (qy - py) * (rx - px);
+  const d1 = cr(ax, ay, bx, by, cx, cy), d2 = cr(ax, ay, bx, by, dx, dy), d3 = cr(cx, cy, dx, dy, ax, ay), d4 = cr(cx, cy, dx, dy, bx, by);
+  if (d1 * d2 < 0 && d3 * d4 < 0) return 0; // they cross
+  return Math.min(segDist(ax, ay, cx, cy, dx, dy), segDist(bx, by, cx, cy, dx, dy), segDist(cx, cy, ax, ay, bx, by), segDist(dx, dy, ax, ay, bx, by));
+}
+// does eraser stroke e touch object o? segment against segment, so even a 0.1 mm eraser stays cheap
 function touches_(o, e) {
-  const p = e.p, r = e.w / 2;
-  if (p.length === 2) return hit(o, p[0], p[1], r);
-  // walk each eraser segment in steps of r/2, fast strokes have far-apart points
-  for (let i = 0; i < p.length - 2; i += 2) {
-    const n = Math.max(1, Math.ceil(Math.hypot(p[i + 2] - p[i], p[i + 3] - p[i + 1]) / (r / 2)));
-    for (let k = 0; k <= n; k++) if (hit(o, p[i] + (p[i + 2] - p[i]) * k / n, p[i + 1] + (p[i + 3] - p[i + 1]) * k / n, r)) return true;
-  }
+  const r = e.w / 2;
+  if (!boxesMeet(bbox(o), bbox({ p: e.p, w: e.w }))) return false;
+  const ep = e.p.length === 2 ? [...e.p, ...e.p] : e.p;
+  let pts = o.p, lim = r + (o.w || 0) / 2;
+  if (o.t === 'text') {
+    const [x0, y0, x1, y1] = textBox(o);
+    for (let i = 0; i < ep.length; i += 2) if (ep[i] >= x0 && ep[i] <= x1 && ep[i + 1] >= y0 && ep[i + 1] <= y1) return true;
+    pts = [x0, y0, x1, y0, x1, y1, x0, y1, x0, y0]; lim = r;
+  } else if (o.t === 'rect') pts = [pts[0], pts[1], pts[2], pts[1], pts[2], pts[3], pts[0], pts[3], pts[0], pts[1]];
+  else if (pts.length === 2) pts = [...pts, ...pts];
+  for (let i = 0; i < ep.length - 2; i += 2)
+    for (let j = 0; j < pts.length - 2; j += 2)
+      if (segSegDist(ep[i], ep[i + 1], ep[i + 2], ep[i + 3], pts[j], pts[j + 1], pts[j + 2], pts[j + 3]) <= lim) return true;
   return false;
 }
 
 // ---------- partial eraser: split shapes, keep a pixel cut only where the eraser merely grazes ----------
-const STEP = 0.3; // mm between samples of a split shape
-function centerline(o) { // dense points along the path exactly as drawShape draws it
+// Points along the path exactly as drawShape draws it: fine steps near the eraser (box eb), coarse elsewhere.
+function centerline(o, eb, fine) {
   const p = o.p, out = [p[0], p[1]];
+  const near = (ax, ay, bx, by) => boxesMeet([Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)], eb);
   const lin = (ax, ay, bx, by) => {
-    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / STEP));
+    const n = near(ax, ay, bx, by) ? Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / fine)) : 1;
     for (let k = 1; k <= n; k++) out.push(ax + (bx - ax) * k / n, ay + (by - ay) * k / n);
   };
   if (o.t === 'rect') { lin(p[0], p[1], p[2], p[1]); lin(p[2], p[1], p[2], p[3]); lin(p[2], p[3], p[0], p[3]); lin(p[0], p[3], p[0], p[1]); return out; }
@@ -120,7 +135,8 @@ function centerline(o) { // dense points along the path exactly as drawShape dra
   let x = p[0], y = p[1];
   for (let i = 2; i < p.length - 2; i += 2) {
     const cx = p[i], cy = p[i + 1], ex = (p[i] + p[i + 2]) / 2, ey = (p[i + 1] + p[i + 3]) / 2;
-    const n = Math.max(1, Math.ceil((Math.hypot(cx - x, cy - y) + Math.hypot(ex - cx, ey - cy)) / STEP));
+    const len = Math.hypot(cx - x, cy - y) + Math.hypot(ex - cx, ey - cy);
+    const n = Math.max(1, Math.ceil(len / (near(Math.min(x, cx, ex), Math.min(y, cy, ey), Math.max(x, cx, ex), Math.max(y, cy, ey)) ? fine : 0.3)));
     for (let k = 1; k <= n; k++) { const t = k / n, u = 1 - t; out.push(u * u * x + 2 * u * t * cx + t * t * ex, u * u * y + 2 * u * t * cy + t * t * ey); }
     x = ex; y = ey;
   }
@@ -136,8 +152,10 @@ function pathDist(x, y, p) {
 function eraseFrom(o, e) {
   if (o.t === 'erase' || !touches_(o, e)) return [o];
   const withCut = () => [{ ...o, x: [...(o.x || []), e] }];
-  if (o.t === 'text') return withCut();
-  const s = centerline(o), n = s.length / 2, r = e.w / 2, h = o.w / 2, eb = bbox({ p: e.p, w: e.w + o.w });
+  // text can't be split; an eraser thinner than the line would leave a pinched gap between two round caps
+  if (o.t === 'text' || e.w < o.w) return withCut();
+  const r = e.w / 2, h = o.w / 2, eb = bbox({ p: e.p, w: e.w + o.w });
+  const s = centerline(o, eb, Math.min(0.3, Math.max(0.02, Math.min(e.w, o.w) / 3))), n = s.length / 2;
   const full = [], touched = [];
   for (let i = 0; i < n; i++) {
     const x = s[2 * i], y = s[2 * i + 1];
@@ -160,8 +178,12 @@ function eraseFrom(o, e) {
   }
   if (!gone.includes(true)) return withCut();
   // pull new ends back by half the line width, so the round caps don't reach into the erased gap
-  const m = Math.round(h / STEP), cutEnd = gone.slice();
-  for (let i = 0; i < n; i++) if (cutEnd[i]) for (let k = Math.max(0, i - m); k <= Math.min(n - 1, i + m); k++) gone[k] = true;
+  // (measured along the path, the samples are not evenly spaced)
+  const L = [0];
+  for (let i = 1; i < n; i++) L.push(L[i - 1] + Math.hypot(s[2 * i] - s[2 * i - 2], s[2 * i + 1] - s[2 * i - 1]));
+  const cutEnd = gone.slice();
+  for (let i = 0, last = -Infinity; i < n; i++) { if (cutEnd[i]) last = L[i]; else if (L[i] - last <= h) gone[i] = true; }
+  for (let i = n - 1, last = Infinity; i >= 0; i--) { if (cutEnd[i]) last = L[i]; else if (last - L[i] <= h) gone[i] = true; }
   const pieces = [];
   let piece = null;
   for (let i = 0; i < n; i++) {
@@ -173,8 +195,26 @@ function eraseFrom(o, e) {
   return pieces.filter(q => q.p.length >= 4).map(({ graze, ...q }) => {
     const x = (o.x || []).filter(c => touches_(q, c));
     if (graze) x.push(e);
+    q.p = simplify(q.p);
     return x.length ? { ...q, x } : q;
   });
+}
+// Douglas-Peucker: drop points within 0.01 mm of the line between kept neighbours (straight runs shrink to 2 points)
+function simplify(p) {
+  const n = p.length / 2;
+  if (n < 3) return p;
+  const keep = new Uint8Array(n), stack = [[0, n - 1]];
+  keep[0] = keep[n - 1] = 1;
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    let far = 0, idx = -1;
+    for (let i = a + 1; i < b; i++) {
+      const d = segDist(p[2 * i], p[2 * i + 1], p[2 * a], p[2 * a + 1], p[2 * b], p[2 * b + 1]);
+      if (d > far) { far = d; idx = i; }
+    }
+    if (far > 0.01) { keep[idx] = 1; stack.push([a, idx], [idx, b]); }
+  }
+  return p.filter((_, i) => keep[i >> 1]);
 }
 const applyErase = (objs, e) => objs.flatMap(o => eraseFrom(o, e));
 // older versions kept partial erases as loose page strokes (v2) or as pixel cuts on whole shapes (v3)
@@ -250,7 +290,7 @@ const stage = $('#stage');
 let fitScale = 1, ox = 0, oy = 0;
 function applyView() {
   Object.assign($('#paper').style, { left: ox + 'px', top: oy + 'px', width: P.w * scale + 'px', height: P.h * scale + 'px' });
-  redraw(); styleText();
+  redraw(); styleText(); sizeDot?.();
 }
 function fit() {
   if (!P) return;
@@ -408,7 +448,7 @@ live.addEventListener('touchstart', e => e.preventDefault(), { passive: false })
 live.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('gesturestart', e => e.preventDefault());
 document.addEventListener('touchmove', e => {
-  if (!$('#editor').hidden && !e.target.closest('dialog, textarea')) e.preventDefault();
+  if (!$('#editor').hidden && !e.target.closest('dialog, textarea, input')) e.preventDefault();
 }, { passive: false });
 
 // ---------- text ----------
@@ -455,7 +495,34 @@ for (const b of document.querySelectorAll('#tools button')) b.onclick = () => {
   for (const x of document.querySelectorAll('#tools button')) x.classList.toggle('on', x === b);
   buildSizes();
 };
+// continuous size picker, logarithmic so the thin end gets most of the slider
+let sizeDot = null;
+function sizeSlider(key) {
+  const [lo, hi] = SIZE_RANGE[key], k = Math.log(hi / lo);
+  const wrap = el('div', 'slider'), dotBox = el('div', 'dotbox'), dot = el('span', 'dot'), label = el('div', 'val');
+  const range = el('input'), minus = el('button', '', '−'), plus = el('button', '', '+'), row = el('div', 'pm');
+  range.type = 'range'; range.min = 0; range.max = 1000;
+  range.setAttribute('aria-label', key === 'width' ? 'Tloušťka čáry' : 'Tloušťka gumy');
+  minus.setAttribute('aria-label', 'Tenčí'); plus.setAttribute('aria-label', 'Silnější');
+  const show = () => { const px = st[key] * scale; dot.style.width = dot.style.height = Math.min(40, Math.max(2, px)) + 'px'; };
+  const set = (v, fromRange) => {
+    v = Math.min(hi, Math.max(lo, v));
+    st[key] = v; localStorage.setItem(key, v);
+    if (!fromRange) range.value = Math.round(Math.log(v / lo) / k * 1000);
+    label.textContent = (v < 1 ? v.toFixed(2) : v.toFixed(1)).replace('.', ',') + ' mm';
+    show();
+  };
+  range.addEventListener('input', () => set(lo * Math.exp(range.value / 1000 * k), true));
+  minus.onclick = () => set(st[key] / 1.15);
+  plus.onclick = () => set(st[key] * 1.15);
+  dotBox.append(dot); row.append(minus, plus);
+  wrap.append(dotBox, label, range, row);
+  set(st[key]);
+  sizeDot = show;
+  return wrap;
+}
 function buildSizes() {
+  sizeDot = null;
   const t = st.tool, box = $('#sizes'), items = [];
   box.hidden = t === 'move';
   if (t === 'erase') for (const [m, label] of [['part', 'Část'], ['whole', 'Celé tahy']]) {
@@ -463,19 +530,14 @@ function buildSizes() {
     b.onclick = () => { st.eraseMode = m; localStorage.setItem('eraseMode', m); buildSizes(); };
     items.push(b);
   }
-  if (t !== 'erase' || st.eraseMode === 'part') {
-    const key = t === 'text' ? 'textSize' : t === 'erase' ? 'eraseWidth' : 'width';
-    const list = t === 'text' ? TEXT_SIZES : t === 'erase' ? ERASE_WIDTHS : WIDTHS;
-    const what = t === 'text' ? 'Písmo ' : t === 'erase' ? 'Tloušťka gumy ' : 'Tloušťka ';
-    list.forEach((v, i) => {
-      const b = el('button', v === st[key] ? 'on' : '');
-      b.setAttribute('aria-label', what + String(v).replace('.', ',') + ' mm');
-      if (t === 'text') { const s = el('span', '', 'A'); s.style.fontSize = 11 + i * 5 + 'px'; b.append(s); }
-      else { const d = el('span', 'dot'); d.style.width = d.style.height = [4, 7, 11, 18][i] + 'px'; b.append(d); }
-      b.onclick = () => { st[key] = v; buildSizes(); styleText(); };
-      items.push(b);
-    });
-  }
+  if (t === 'text') TEXT_SIZES.forEach((v, i) => {
+    const b = el('button', v === st.textSize ? 'on' : '');
+    b.setAttribute('aria-label', 'Písmo ' + v + ' mm');
+    const a = el('span', '', 'A'); a.style.fontSize = 11 + i * 5 + 'px'; b.append(a);
+    b.onclick = () => { st.textSize = v; buildSizes(); styleText(); };
+    items.push(b);
+  });
+  else if (t !== 'erase' || st.eraseMode === 'part') items.push(sizeSlider(t === 'erase' ? 'eraseWidth' : 'width'));
   box.replaceChildren(...items);
 }
 const colorBox = $('#colors'), custom = el('label', 'sw custom'), picker = el('input');
