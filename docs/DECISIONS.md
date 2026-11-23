@@ -2,6 +2,23 @@
 
 Nejnovější nahoře. Ke každé změně: co, proč a co zůstává otevřené.
 
+## 2026-11-23: Schránka pro přenos do noťasu (`komiks-v5`)
+
+- V Exportu přibylo u každého formátu tlačítko „Do schránky“. Soubor se nahraje do
+  Workeru `komiks-schranka` a na noťasu se do hodiny stáhne z
+  komiks-schranka.kackaodkazyapoznamky.workers.dev.
+- **Proč vlastní Worker a ne služba typu tmpfiles nebo litterbox:** soubory zůstanou na
+  Katčině účtu, je tam heslo, a cizí služby obvykle nepovolují nahrávání přímo z jiné
+  webové stránky (CORS). Cloudflare free plán a KV se automatickým mazáním po hodině
+  (`expirationTtl`) stojí nula a nic se nehromadí.
+- **Proč KV a ne R2:** R2 by bylo okamžitě konzistentní, ale jeho zapnutí chce platební
+  kartu. KV na free plánu stačí, cenou je zpoždění seznamu až o minutu.
+- Heslo i hodina dohromady: Katka navrhla jedno nebo druhé, obojí stojí stejně málo kódu.
+- Přetažení souboru z webu rovnou do složky Firefox neumí, proto se soubor stahuje
+  kliknutím.
+- Původní zadání chtělo appku bez backendu. Schránka je nepovinná, zbytek appky dál
+  funguje bez ní i offline.
+
 ## 2026-11-22: Guma rozděluje tvary (`komiks-v4`)
 
 - Guma „Část“ teď čáru, tah perem nebo obdélník rozdělí na kousky (`poly`). Vygumovaný

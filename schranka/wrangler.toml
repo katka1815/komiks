@@ -1,0 +1,11 @@
+name = "komiks-schranka"
+main = "worker.js"
+compatibility_date = "2026-06-01"
+workers_dev = true
+
+# Soubory tu žijí hodinu (expirationTtl), pak je KV samo smaže.
+[[kv_namespaces]]
+binding = "KV"
+id = "99519d9632d24a29974dbb53a59ed36e"
+
+# Heslo je tajemství: npx wrangler secret put HESLO

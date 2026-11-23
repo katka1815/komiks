@@ -645,6 +645,30 @@ async function share(file) {
     b.onclick = () => { b.hidden = true; share(file).catch(err => expMsg('Sdílení selhalo: ' + err.message)); };
   }
 }
+// inbox Worker (schranka/): the laptop downloads the file from there within an hour
+const SCHRANKA = 'https://komiks-schranka.kackaodkazyapoznamky.workers.dev';
+async function upload(file) {
+  let heslo = localStorage.getItem('schrankaHeslo') || '';
+  for (;;) {
+    if (!heslo) {
+      const { v, f } = await modal('Heslo ke schránce', '<label>Heslo <input name="pw" required autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></label>',
+        [['Zrušit', ''], ['Uložit', 'ok', 'primary']]);
+      if (v !== 'ok') return expMsg('');
+      heslo = f.elements.pw.value.trim();
+    }
+    expMsg(`Nahrávám ${file.name}…`);
+    let r;
+    try {
+      r = await fetch(SCHRANKA + '/upload?name=' + encodeURIComponent(file.name),
+        { method: 'POST', headers: { Authorization: 'Bearer ' + heslo, 'Content-Type': file.type }, body: file });
+    } catch { throw new Error('schránka není dostupná, jsi připojená k internetu?'); }
+    if (r.status === 401) { localStorage.removeItem('schrankaHeslo'); heslo = ''; toast('Špatné heslo ke schránce.'); continue; }
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'schránka odpověděla chybou ' + r.status);
+    localStorage.setItem('schrankaHeslo', heslo);
+    return expMsg(`Nahráno: ${file.name}. Na noťasu otevři ${SCHRANKA.replace('https://', '')}, soubor tam vydrží hodinu.`);
+  }
+}
 let busy = false;
 $('#exp').addEventListener('click', async e => {
   const b = e.target.closest('button[data-how]');
@@ -652,7 +676,8 @@ $('#exp').addEventListener('click', async e => {
   busy = true; $('#exp').classList.add('busy'); $('#expshare').hidden = true; expMsg('Připravuji…');
   try {
     const file = await makeFile(b.closest('[data-kind]').dataset.kind);
-    if (b.dataset.how === 'share' && navigator.canShare?.({ files: [file] })) await share(file);
+    if (b.dataset.how === 'box') await upload(file);
+    else if (b.dataset.how === 'share' && navigator.canShare?.({ files: [file] })) await share(file);
     else {
       download(file);
       expMsg(b.dataset.how === 'share' ? `Sdílení tu není k dispozici, soubor ${file.name} se stahuje.` : `Stahuje se ${file.name}`);

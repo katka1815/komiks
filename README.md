@@ -2,7 +2,8 @@
 
 Webová appka (PWA) na kreslení komiksů na iPadu s Apple Pencil. Je to čistě statický web
 (HTML + CSS + vanilla JS, bez build kroku a bez knihoven). Nepotřebuje účet ani backend
-a data zůstávají jen v iPadu (IndexedDB). Appku používá jen Katka.
+a data zůstávají jen v iPadu (IndexedDB). Appku používá jen Katka. Jediná serverová část je
+nepovinná **schránka** pro přenos exportů do noťasu (malý Cloudflare Worker ve složce `schranka/`).
 
 Běží na **https://katka1815.github.io/komiks/**, repo **github.com/katka1815/komiks**
 (veřejné, GitHub Pages z větve `main`).
@@ -46,6 +47,13 @@ nebo JPG stránky) → „Sdílet / poslat“ → Mail, Gmail, Zprávy, AirDrop 
 Souborů“. Když se příprava souboru protáhne, iPad chce ještě jedno klepnutí, proto se
 objeví tlačítko „Sdílet soubor“. „Stáhnout“ je záložní cesta pro případ, že sdílení nejde.
 
+**Do noťasu přes schránku:** Export → u formátu „Do schránky“. Poprvé se appka zeptá na heslo
+a pak si ho pamatuje. Na noťasu otevři **https://komiks-schranka.kackaodkazyapoznamky.workers.dev**,
+prohlížeč se zeptá na heslo (jméno může být cokoliv, třeba `katka`) a ukáže seznam souborů.
+Kliknutím se soubor stáhne. Každý soubor tam vydrží **hodinu od nahrání**, pak se sám smaže.
+Nový soubor se v seznamu může ukázat až po minutě, stránka se obnovuje sama. Heslo není
+v repu, má ho jen Katka (a Cloudflare jako tajemství Workeru).
+
 **Záloha:** Export → „Záloha projektu (.json)“ → Sdílet / poslat → Uložit do Souborů (nebo
 si ji pošli mailem). Obnova: na seznamu projektů dej „Import zálohy“ a vyber ten soubor.
 Projekt se přidá jako nový, žádný stávající se nepřepíše.
@@ -63,6 +71,7 @@ nebo appku z plochy, projekty zmizí. Proto si dělej zálohy.
 | `pdf.js` | vlastní minimální PDF writer (jeden JPEG obrázek na stranu), funguje offline |
 | `sw.js` | service worker: kešuje všechny soubory kvůli offline režimu, `VERSION` řídí aktualizace |
 | `manifest.json`, `*.png` | PWA manifest a ikony (`apple-touch-icon.png` pro iOS) |
+| `schranka/worker.js`, `schranka/wrangler.toml` | schránka: příjem souborů z iPadu, stránka se seznamem pro noťas |
 | `check_pdf.py` | ověření exportovaného PDF: `python check_pdf.py soubor.pdf POČET_STRAN ŠÍŘKA_MM VÝŠKA_MM` |
 | `docs/DECISIONS.md` | rozhodnutí a historie změn |
 
@@ -110,6 +119,30 @@ objekt  { t: 'pen' | 'line' | 'rect', c: barva, w: tloušťka, p: [x, y, x, y…
   odmítne kvůli prošlému gestu (`NotAllowedError`), objeví se tlačítko „Sdílet soubor“.
   Bez sdílení se soubor stáhne přes blob URL a `<a download>`.
 
+## Schránka (`schranka/`)
+
+Cloudflare Worker `komiks-schranka` na Katčině účtu (stejném jako Rozcestník), free plán.
+Soubory ukládá do KV namespace `SCHRANKA` s `expirationTtl` 3600 s, takže je KV po hodině
+samo smaže a nic se nehromadí.
+
+- `POST /upload?name=…` s hlavičkou `Authorization: Bearer <heslo>` a souborem v těle.
+  CORS je otevřený pro všechny, chrání to heslo. Limit 25 MB (strop hodnoty v KV).
+- `GET /` vypíše seznam a `GET /f/<klíč>` soubor stáhne. Obojí chrání HTTP Basic auth,
+  heslo se porovnává v konstantním čase.
+- KV `list` je jen „časem konzistentní“, proto se nový soubor může v seznamu ukázat se
+  zpožděním až minutu.
+- Limity free plánu: 1000 nahrání denně, 1 GB místa. Na tohle použití to stačí s velkou rezervou.
+
+Nasazení a heslo (ve složce `schranka/`):
+
+```
+npx wrangler deploy
+npx wrangler secret put HESLO      # změna hesla; pak ho zadej znovu v appce
+```
+
+Když se heslo změní, appka při dalším nahrání dostane odpověď „špatné heslo“, zapomene
+staré heslo a zeptá se na nové.
+
 ## Lokální testování
 
 ```
@@ -137,6 +170,8 @@ tlačítkem „Sdílet soubor“. Opravdové sdílení se dá vyzkoušet jen na 
 
 ## Známá omezení
 
+- Schránka potřebuje internet. Bez něj appka napíše „schránka není dostupná“, ostatní
+  exporty fungují dál offline.
 - Testované jen v desktopovém Chromiu s rozměry iPadu. Na skutečném iPadu s Apple
   Pencil zatím ne.
 - „Stáhnout“ v appce spuštěné z plochy může iOS blokovat. Spolehlivá cesta je
