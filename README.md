@@ -47,12 +47,12 @@ nebo JPG stránky) → „Sdílet / poslat“ → Mail, Gmail, Zprávy, AirDrop 
 Souborů“. Když se příprava souboru protáhne, iPad chce ještě jedno klepnutí, proto se
 objeví tlačítko „Sdílet soubor“. „Stáhnout“ je záložní cesta pro případ, že sdílení nejde.
 
-**Do noťasu přes schránku:** Export → u formátu „Do schránky“. Poprvé se appka zeptá na heslo
-a pak si ho pamatuje. Na noťasu otevři **https://komiks-schranka.kackaodkazyapoznamky.workers.dev**,
-prohlížeč se zeptá na heslo (jméno může být cokoliv, třeba `katka`) a ukáže seznam souborů.
-Kliknutím se soubor stáhne. Každý soubor tam vydrží **hodinu od nahrání**, pak se sám smaže.
-Nový soubor se v seznamu může ukázat až po minutě, stránka se obnovuje sama. Heslo není
-v repu, má ho jen Katka (a Cloudflare jako tajemství Workeru).
+**Do noťasu přes schránku:** Export → u formátu „Do schránky“. Appka se zeptá na heslo
+k tomuhle souboru. Můžeš ho vyplnit, nebo nechat prázdné a soubor bude bez hesla. Na noťasu
+otevři **https://komiks-schranka.kackaodkazyapoznamky.workers.dev**. Seznam souborů je
+vidět bez hesla. Soubor bez hesla stáhneš kliknutím. U souboru se zámkem 🔒 nejdřív zadáš
+jeho heslo. Každý soubor tam vydrží **hodinu od nahrání**, pak se sám smaže. Nový soubor se
+v seznamu může ukázat až po minutě, stránka se obnovuje sama.
 
 **Záloha:** Export → „Záloha projektu (.json)“ → Sdílet / poslat → Uložit do Souborů (nebo
 si ji pošli mailem). Obnova: na seznamu projektů dej „Import zálohy“ a vyber ten soubor.
@@ -125,23 +125,19 @@ Cloudflare Worker `komiks-schranka` na Katčině účtu (stejném jako Rozcestn�
 Soubory ukládá do KV namespace `SCHRANKA` s `expirationTtl` 3600 s, takže je KV po hodině
 samo smaže a nic se nehromadí.
 
-- `POST /upload?name=…` s hlavičkou `Authorization: Bearer <heslo>` a souborem v těle.
-  CORS je otevřený pro všechny, chrání to heslo. Limit 25 MB (strop hodnoty v KV).
-- `GET /` vypíše seznam a `GET /f/<klíč>` soubor stáhne. Obojí chrání HTTP Basic auth,
-  heslo se porovnává v konstantním čase.
+- `POST /upload?name=…` se souborem v těle a volitelnou hlavičkou `X-Heslo` (heslo
+  zakódované přes `encodeURIComponent`, protože hlavička neunese diakritiku). Uloží se jen
+  SHA-256 otisk hesla s klíčem souboru, ne heslo samotné. Limit 25 MB (strop hodnoty v KV).
+- Nahrávání je otevřené komukoli, kdo zná adresu. Proti zaplnění je strop 50 souborů
+  najednou, a protože se soubory po hodině mažou, víc se nenahromadí.
+- `GET /` vypíše seznam (názvy jsou vidět i u zamčených souborů). `GET /f/<klíč>` stáhne
+  soubor bez hesla. U zamčeného ukáže formulář a `POST /f/<klíč>` s heslem vrátí soubor.
+  Hesla se porovnávají v konstantním čase.
 - KV `list` je jen „časem konzistentní“, proto se nový soubor může v seznamu ukázat se
   zpožděním až minutu.
 - Limity free plánu: 1000 nahrání denně, 1 GB místa. Na tohle použití to stačí s velkou rezervou.
 
-Nasazení a heslo (ve složce `schranka/`):
-
-```
-npx wrangler deploy
-npx wrangler secret put HESLO      # změna hesla; pak ho zadej znovu v appce
-```
-
-Když se heslo změní, appka při dalším nahrání dostane odpověď „špatné heslo“, zapomene
-staré heslo a zeptá se na nové.
+Nasazení (ve složce `schranka/`): `npx wrangler deploy`. Worker nepotřebuje žádné tajemství.
 
 ## Lokální testování
 

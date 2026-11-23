@@ -648,26 +648,22 @@ async function share(file) {
 // inbox Worker (schranka/): the laptop downloads the file from there within an hour
 const SCHRANKA = 'https://komiks-schranka.kackaodkazyapoznamky.workers.dev';
 async function upload(file) {
-  let heslo = localStorage.getItem('schrankaHeslo') || '';
-  for (;;) {
-    if (!heslo) {
-      const { v, f } = await modal('Heslo ke schránce', '<label>Heslo <input name="pw" required autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></label>',
-        [['Zrušit', ''], ['Uložit', 'ok', 'primary']]);
-      if (v !== 'ok') return expMsg('');
-      heslo = f.elements.pw.value.trim();
-    }
-    expMsg(`Nahrávám ${file.name}…`);
-    let r;
-    try {
-      r = await fetch(SCHRANKA + '/upload?name=' + encodeURIComponent(file.name),
-        { method: 'POST', headers: { Authorization: 'Bearer ' + heslo, 'Content-Type': file.type }, body: file });
-    } catch { throw new Error('schránka není dostupná, jsi připojená k internetu?'); }
-    if (r.status === 401) { localStorage.removeItem('schrankaHeslo'); heslo = ''; toast('Špatné heslo ke schránce.'); continue; }
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(d.error || 'schránka odpověděla chybou ' + r.status);
-    localStorage.setItem('schrankaHeslo', heslo);
-    return expMsg(`Nahráno: ${file.name}. Na noťasu otevři ${SCHRANKA.replace('https://', '')}, soubor tam vydrží hodinu.`);
-  }
+  const { v, f } = await modal('Poslat do schránky',
+    `<p>${file.name.replace(/[&<>]/g, '')}</p><label>Heslo k souboru (nepovinné) <input name="pw" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Bez hesla"></label>`,
+    [['Zrušit', ''], ['Poslat', 'ok', 'primary']]);
+  if (v !== 'ok') return expMsg('');
+  const pw = f.elements.pw.value.trim();
+  expMsg(`Nahrávám ${file.name}…`);
+  let r;
+  try {
+    r = await fetch(SCHRANKA + '/upload?name=' + encodeURIComponent(file.name), {
+      method: 'POST', body: file,
+      headers: { 'Content-Type': file.type, ...(pw && { 'X-Heslo': encodeURIComponent(pw) }) },
+    });
+  } catch { throw new Error('schránka není dostupná, jsi připojená k internetu?'); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'schránka odpověděla chybou ' + r.status);
+  expMsg(`Nahráno ${pw ? 's heslem' : 'bez hesla'}: ${file.name}. Na noťasu otevři ${SCHRANKA.replace('https://', '')}, soubor tam vydrží hodinu.`);
 }
 let busy = false;
 $('#exp').addEventListener('click', async e => {

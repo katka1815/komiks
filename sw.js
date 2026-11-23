@@ -1,5 +1,5 @@
 // Bump VERSION on every deploy, otherwise the installed app keeps serving the old files.
-const VERSION = 'komiks-v5';
+const VERSION = 'komiks-v6';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'pdf.js', 'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => e.waitUntil(

@@ -2,6 +2,17 @@
 
 Nejnovější nahoře. Ke každé změně: co, proč a co zůstává otevřené.
 
+## 2026-11-23: Heslo u každého souboru zvlášť (`komiks-v6`)
+
+- Při „Do schránky“ se appka zeptá na heslo k tomu jednomu souboru. Prázdné pole znamená
+  soubor bez hesla. Společné heslo schránky (tajemství `HESLO`) je zrušené.
+- Seznam na noťasu je teď vidět bez hesla, zamčené soubory mají 🔒 a před stažením chtějí
+  svoje heslo. Názvy zamčených souborů jsou v seznamu vidět. Katka bere, že soubor tam je
+  jen hodinu a nikdo ho nenajde.
+- Ukládá se jen SHA-256 otisk hesla s klíčem souboru.
+- Nahrávání je bez společného hesla otevřené. Proti zaplnění je strop 50 souborů najednou.
+  Horší než chybová hláška „schránka je plná“ to být nemůže, free plán se sám nezpoplatní.
+
 ## 2026-11-23: Schránka pro přenos do noťasu (`komiks-v5`)
 
 - V Exportu přibylo u každého formátu tlačítko „Do schránky“. Soubor se nahraje do
