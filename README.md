@@ -25,12 +25,20 @@ Duplikovat a Smazat. Všechno se ukládá samo.
   10 mm. Tlačítky − a + ji jemně doladíš. Puntík nad posuvníkem ukazuje tloušťku tak, jak
   vypadá při aktuálním zoomu, pod ním je číslo v mm. Čára a Obdélník používají stejnou
   tloušťku. Appka si ji pamatuje. Tahy se jemně vyhlazují (asi o 1 pixel obrazovky), aby
-  zmizelo chvění, konce tahu zůstanou přesně tam, kde jsi začala a skončila.
+  zmizelo chvění. Konce tahu zůstanou přesně tam, kde jsi začala a skončila. Kde se tah
+  vrací zpátky (otočka o 180° ± 10°, třeba při vybarvování čárami tam a zpátky), zůstane
+  špička ostrá a na místě.
 - **Čára:** rovná čára z bodu A do B. Do 5° od vodorovné nebo svislé se srovná.
 - **Obdélník:** na rámečky panelů.
 - **Text:** ťukni na místo, napiš text a dej OK. Ťuknutím na existující text ho upravíš.
   Když text smažeš celý, zmizí.
-- **Posun:** chyť objekt a přesuň ho.
+- **Výběr:** ťukni na tah a rovnou ho táhni, nebo tažením po prázdném místě zakroužkuj
+  oblast (vybere se všechno, co je z větší části uvnitř). Kolem výběru se objeví rámeček:
+  - tažením uvnitř rámečku výběr posuneš,
+  - tažením za rohový čtvereček ho zvětšíš nebo zmenšíš (protější roh zůstane na místě),
+  - tažením za kolečko nad rámečkem ho otočíš.
+
+  Čáry a písmo se zvětšují spolu s výběrem. Ťuknutím mimo výběr ho zrušíš.
 - **Guma** má dva režimy:
   - **Část** (tloušťka posuvníkem od 0,1 do 40 mm) maže jen to, přes co přejedeš. Čára, tah
     perem nebo obdélník se v tom místě rozdělí na kousky.
@@ -47,8 +55,9 @@ stránek a „2 / 5“, přidat, duplikovat a smazat stránku, přepínač **Jen
 **Jen Pencil** (výchozí): prst nikdy nekreslí, takže dlaň na displeji nevadí. Když je
 vypnuté, kreslí i prst.
 
-**Zoom:** dvěma prsty přibližuješ (až 8×), oddaluješ a posouváš. Se zapnutým „Jen Pencil“
-posouváš stránku i jedním prstem. Po oddálení na celou stránku se stránka srovná doprostřed.
+**Zoom:** dvěma prsty přibližuješ (až 8×), oddaluješ a posouváš. Stránka se posouvá
+**jen dvěma prsty**, jeden prst ani položená dlaň s ní nepohne. Po oddálení na celou stránku
+se stránka srovná doprostřed.
 
 **Export a poslání mailem:** Export → vyber formát (PDF celého komiksu, PDF stránky, PNG
 nebo JPG stránky) → „Sdílet / poslat“ → Mail, Gmail, Zprávy, AirDrop nebo „Uložit do
@@ -91,12 +100,14 @@ Všechno je v milimetrech, takže kresba sedí při každé velikosti obrazovky 
 Projekt { id, name, w, h, v: 4, pages: [[objekt…], …], updated }
 objekt  { t: 'pen' | 'line' | 'rect', c: barva, w: tloušťka, p: [x, y, x, y…] }
         { t: 'poly', c, w, p: [x, y, x, y…] }   kousek rozdělené čáry (rovné úseky)
-        { t: 'text', c: barva, s: velikost písma, p: [x, y], text }
-        { t: 'fill', c: barva, p: [x0, y0, x1, y1], m: 'data:image/png;base64,…' }   výplň kyblíkem
+        { t: 'text', c: barva, s: velikost písma, p: [x, y], text, a?: úhel }
+        { t: 'fill', c: barva, p: [x0, y0, x1, y1], m: 'data:image/png;base64,…', a?: úhel }   výplň kyblíkem
         kterýkoli může mít x: [{ t: 'erase', c, w: tloušťka gumy, p: [x, y…] }, …]
 ```
 
-- Objekty se nikdy neupravují na místě (posun i guma vytvoří nové objekty). Proto stačí,
+- `a` je otočení v radiánech (text kolem levého horního rohu, výplň kolem středu). Čáry
+  úhel nemají, otáčí se přímo jejich body. Otočený obdélník se změní na `poly`.
+- Objekty se nikdy neupravují na místě (výběr i guma vytvoří nové objekty). Proto stačí,
   když si zpět/znovu pamatuje jen kopie polí stránek (až 200 kroků).
 - `x` jsou pixelové ořezy. Vznikají jen u textu a tam, kde guma čáru škrtne po okraji.
   Takový objekt se kreslí na pomocnou vrstvu `scratch`, ořez se vyřízne
@@ -115,7 +126,14 @@ objekt  { t: 'pen' | 'line' | 'rect', c: barva, w: tloušťka, p: [x, y, x, y…
   ostré. Při otočení iPadu se pohled vrátí na celou stránku (`fit`).
 - **Vstup:** pointer events + `getCoalescedEvents`. Pero, tužka i myš kreslí. Prst
   (`pointerType 'touch'`) jde do gest (`gestureMove`), pokud je zapnuté „Jen Pencil“ nebo
-  jsou na displeji dva prsty.
+  jsou na displeji dva prsty. Stránkou hýbou jen dva prsty, jeden se ignoruje, aby ji
+  neposunula položená ruka.
+- **Výběr** (`sel`, `selHandle`, `selectMove`): výběr si drží indexy objektů na stránce a
+  rámeček `{ cx, cy, w, h, a }`. Laso vybere objekty, které mají aspoň polovinu bodů uvnitř
+  (`lassoSelect`). Posun, změna velikosti (kolem protějšího rohu) a otočení (kolem středu
+  rámečku) se vždy počítají z původních objektů (`transformObj`), takže se nehromadí
+  zaokrouhlovací chyby. Tloušťka čar, velikost písma i ořezy gumy se škálují spolu s výběrem.
+  Rámeček a úchyty se kreslí na plátno `live`. Zpět, změna nástroje nebo stránky výběr zruší.
 - **Guma „Část“** (`eraseFrom`):
   - Jestli se guma objektu dotkne, zjistí `touches_` porovnáním úseček gumy s úsečkami
     objektu. Je to rychlé i pro 0,1mm gumu.
@@ -128,9 +146,12 @@ objekt  { t: 'pen' | 'line' | 'rect', c: barva, w: tloušťka, p: [x, y, x, y…
     kousek má zase jen 2 body.
   - Úsek, který guma jen škrtne, text a guma tenčí než čára dostanou ořez `x`. U tenké gumy
     přes silnou čáru by dva kulaté konce vedle sebe vypadaly jako přiškrcení.
-- **Vyhlazení tahu** (`smooth`): Gaussův průměr podél tahu se šířkou 1,2 CSS px přepočtenou
-  na mm podle zoomu při kreslení. U konců se okno zmenšuje, takže začátek a konec tahu se
-  nepohnou. Body se zaznamenávají po půl pixelu obrazovky, takže kreslení při velkém zoomu
+- **Vyhlazení tahu** (`smooth`, `smoothRun`): Gaussův průměr podél tahu se šířkou 1,2 CSS px
+  přepočtenou na mm podle zoomu při kreslení. Nejdřív se najdou obraty: úhel mezi směrem
+  tahu 2σ před bodem a 2σ za ním je aspoň 168° (`CORNER`, tedy 180° ± 10° s malou rezervou
+  na měření). V každém obratu se jako špička vezme bod nejdál od začátku obratu. Tah se
+  ve špičkách rozdělí a každý kus se vyhladí zvlášť. U konců kusu se okno zmenšuje, takže
+  začátek, konec i špičky se nepohnou. Body se zaznamenávají po půl pixelu obrazovky, takže kreslení při velkém zoomu
   není hranaté. Živý náhled ukazuje už vyhlazený tah.
 - **Kyblík** (`bucket`): stránka bez ostatních výplní se vykreslí do pomocného plátna
   v 6 px/mm (asi 150 DPI). Z místa ťuknutí se vyplní všechny sousední pixely, které nejsou
@@ -185,7 +206,7 @@ tlačítkem „Sdílet soubor“. Opravdové sdílení se dá vyzkoušet jen na 
 
 ## Nasazení nové verze
 
-1. V `sw.js` zvyš `VERSION` (teď `komiks-v8`). Bez toho by appka na ploše dál používala
+1. V `sw.js` zvyš `VERSION` (teď `komiks-v9`). Bez toho by appka na ploše dál používala
    staré soubory.
 2. `git commit` a `git push`. GitHub Pages to asi za minutu nasadí.
 3. V appce se nová verze načte, až se vrátíš na seznam projektů. Uprostřed kreslení se

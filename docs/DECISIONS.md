@@ -2,6 +2,29 @@
 
 Nejnovější nahoře. Ke každé změně: co, proč a co zůstává otevřené.
 
+## 2026-11-24: Posun jen dvěma prsty, Výběr místo Posunu, ostré obraty (`komiks-v9`)
+
+- **Jen dva prsty hýbou stránkou.** Se zapnutým „Jen Pencil“ dřív posouval i jeden prst,
+  takže položená ruka posunula plátno. Teď se jeden prst ignoruje. Zůstává riziko, že dlaň
+  iPad nahlásí jako dva dotyky, to se ukáže až na zařízení.
+- **Výběr** nahradil Posun. Ťuknutí na tah ho vybere a dá se hned táhnout, takže dřívější
+  posouvání funguje jedním pohybem jako předtím. Laso vybere objekty s aspoň polovinou bodů
+  uvnitř. Je to jednoduchá a předvídatelná hranice, vybírání po pixelech by bylo mnohem
+  víc kódu.
+- Změna velikosti je jen rovnoměrná (bez deformace). Kolem protějšího rohu, protože tak se
+  to chová v běžných kreslicích programech. Otáčí se kolem středu rámečku.
+- **Otáčení textu a výplní** přidalo k objektu úhel `a`. Text se upravuje v neotočeném poli
+  a úhel se mu po úpravě zachová. Otočený obdélník se změní na `poly`, protože obdélník
+  je uložený jen dvěma rohy.
+- Výběr nemá vlastní mazání, Katka o něj nežádala. Maže se gumou „Celé tahy“.
+- **Vyhlazení se zastaví v obratech.** Katka vybarvuje čárami tam a zpátky a vyhlazení
+  zakulacovalo a zkracovalo špičky. Teď se tah v obratu (180° ± 10°) rozdělí a vyhlazuje
+  se jen mezi obraty. Měřeno: dřív špička ustoupila o 0,37 mm, teď zůstane přesně na místě.
+  Menší úhly (třeba 90°) se dál nepatrně zakulatí, podle zadání.
+- Chyba nalezená v testu: u přesného obratu o 180° měly všechny body kolem špičky stejný
+  úhel a vybral se první z nich, ne špička. Opraveno: špičkou je bod obratu nejdál od jeho
+  začátku.
+
 ## 2026-11-24: Jemné vyhlazení tahů a kyblík (`komiks-v8`)
 
 - **Vyhlazení:** Katka chtěla jen velmi jemné, aby se vyrovnalo chvění Pencilu. Je to

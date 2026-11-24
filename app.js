@@ -93,7 +93,11 @@ function drawObj(ctx, o) {
 }
 function bbox(o) {
   if (o.t === 'text') return textBox(o);
-  if (o.t === 'fill') return o.p;
+  if (o.t === 'fill') {
+    if (!o.a) return o.p;
+    const [x0, y0, x1, y1] = o.p, hw = (x1 - x0) / 2, hh = (y1 - y0) / 2;
+    return boxOf(rotPts([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]], x0 + hw, y0 + hh, o.a));
+  }
   const xs = o.p.filter((_, i) => i % 2 === 0), ys = o.p.filter((_, i) => i % 2), r = o.w / 2 + 1;
   return [Math.min(...xs) - r, Math.min(...ys) - r, Math.max(...xs) + r, Math.max(...ys) + r];
 }
@@ -259,11 +263,18 @@ function fillAlpha(o) { // mask pixels for hit testing, read once per image
 }
 function drawShape(ctx, o) {
   const p = o.p;
-  if (o.t === 'fill') { const f = fillEntry(o); if (f.ok) ctx.drawImage(f.img, p[0], p[1], p[2] - p[0], p[3] - p[1]); return; }
+  if (o.t === 'fill') {
+    const f = fillEntry(o), w = p[2] - p[0], h = p[3] - p[1];
+    if (!f.ok) return;
+    ctx.save(); ctx.translate(p[0] + w / 2, p[1] + h / 2); if (o.a) ctx.rotate(o.a);
+    ctx.drawImage(f.img, -w / 2, -h / 2, w, h);
+    ctx.restore();
+    return;
+  }
   ctx.strokeStyle = ctx.fillStyle = o.c;
   if (o.t === 'text') {
     // draw at 10x and scale down: Safari rasterizes tiny font sizes poorly
-    ctx.save(); ctx.translate(p[0], p[1]); ctx.scale(0.1, 0.1);
+    ctx.save(); ctx.translate(p[0], p[1]); if (o.a) ctx.rotate(o.a); ctx.scale(0.1, 0.1);
     ctx.font = `${o.s * 10}px ${FONT}`; ctx.textBaseline = 'top';
     o.text.split('\n').forEach((l, i) => ctx.fillText(l, 0, i * o.s * 12));
     ctx.restore();
@@ -313,13 +324,14 @@ function redraw() {
   for (const o of P.pages[cur]) drawObj(bctx, o);
   bctx.restore();
 }
-function showLive(o) { viewCtx(lctx); if (o) drawObj(lctx, o); }
+function showLive(o) { viewCtx(lctx); if (o) drawObj(lctx, o); drawSel(lctx); }
 
 const stage = $('#stage');
 let fitScale = 1, ox = 0, oy = 0;
 function applyView() {
   Object.assign($('#paper').style, { left: ox + 'px', top: oy + 'px', width: P.w * scale + 'px', height: P.h * scale + 'px' });
   redraw(); styleText(); sizeDot?.();
+  if (!act) showLive(null);
 }
 function fit() {
   if (!P) return;
@@ -332,7 +344,7 @@ function fit() {
 }
 new ResizeObserver(fit).observe(stage);
 
-// finger gestures: two fingers zoom + pan; with "Jen Pencil" one finger pans too
+// finger gestures: only two fingers zoom + pan; one finger or a resting palm never moves the page
 const touches = new Map();
 function gestureMove(e) {
   const before = [...touches.values()];
@@ -347,7 +359,7 @@ function gestureMove(e) {
     ox = c1[0] - r.left - (c0[0] - r.left - ox) / scale * s1;
     oy = c1[1] - r.top - (c0[1] - r.top - oy) / scale * s1;
     scale = s1;
-  } else { ox += after[0].x - before[0].x; oy += after[0].y - before[0].y; }
+  } else return;
   const W = stage.clientWidth, H = stage.clientHeight;
   ox = Math.min(W / 2, Math.max(W / 2 - P.w * scale, ox));
   oy = Math.min(H / 2, Math.max(H / 2 - P.h * scale, oy));
@@ -355,7 +367,7 @@ function gestureMove(e) {
 }
 function cancelAct() {
   if (pending) { P.pages = pending.pages; cur = pending.cur; pending = null; }
-  act = null; showLive(null); redraw();
+  act = null; sel = null; showLive(null); redraw();
 }
 
 // ---------- hit testing ----------
@@ -364,14 +376,18 @@ function segDist(x, y, ax, ay, bx, by) {
   const t = l ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l)) : 0;
   return Math.hypot(x - ax - t * dx, y - ay - t * dy);
 }
-function textBox(o) {
+const rotPts = (pts, cx, cy, a) => pts.map(([u, v]) => [cx + u * Math.cos(a) - v * Math.sin(a), cy + u * Math.sin(a) + v * Math.cos(a)]);
+const boxOf = pts => [Math.min(...pts.map(q => q[0])), Math.min(...pts.map(q => q[1])), Math.max(...pts.map(q => q[0])), Math.max(...pts.map(q => q[1]))];
+function textBox(o) { // axis-aligned box, also around rotated text
   mctx.font = `${o.s * 10}px ${FONT}`;
-  const lines = o.text.split('\n'), w = Math.max(...lines.map(l => mctx.measureText(l).width)) / 10;
-  return [o.p[0], o.p[1], o.p[0] + w, o.p[1] + lines.length * o.s * 1.2];
+  const lines = o.text.split('\n'), w = Math.max(...lines.map(l => mctx.measureText(l).width)) / 10, h = lines.length * o.s * 1.2;
+  if (!o.a) return [o.p[0], o.p[1], o.p[0] + w, o.p[1] + h];
+  return boxOf(rotPts([[0, 0], [w, 0], [w, h], [0, h]], o.p[0], o.p[1], o.a));
 }
 function hit(o, x, y, tol) {
   const p = o.p;
   if (o.t === 'fill') {
+    if (o.a) [[x, y]] = rotPts([[x - (p[0] + p[2]) / 2, y - (p[1] + p[3]) / 2]], (p[0] + p[2]) / 2, (p[1] + p[3]) / 2, -o.a);
     if (x < p[0] || x > p[2] || y < p[1] || y > p[3]) return false;
     const a = fillAlpha(o);
     return !a || a.d[(Math.min(a.h - 1, Math.floor((y - p[1]) / (p[3] - p[1]) * a.h)) * a.w + Math.min(a.w - 1, Math.floor((x - p[0]) / (p[2] - p[0]) * a.w))) * 4 + 3] > 0;
@@ -387,7 +403,6 @@ function topHit(x, y, only) {
   for (let i = a.length - 1; i >= 0; i--) if (a[i].t !== 'erase' && (!only || a[i].t === only) && hit(a[i], x, y, tol)) return i;
   return -1;
 }
-const moved = (o, dx, dy) => ({ ...o, p: o.p.map((v, i) => v + (i % 2 ? dy : dx)), ...(o.x && { x: o.x.map(e => moved(e, dx, dy)) }) });
 function snapLine(x0, y0, x, y) {
   const a = Math.abs(Math.atan2(y - y0, x - x0)) * 180 / Math.PI; // 0..180
   if (a < 5 || a > 175) return [x, y0];
@@ -403,7 +418,7 @@ function end(changed) {
   pending = null; redraw(); updateUI();
 }
 const commit = fn => { begin(); fn(); end(true); };
-function restore(s) { P.pages = s.pages; cur = s.cur; save(); redraw(); updateUI(); }
+function restore(s) { sel = null; P.pages = s.pages; cur = s.cur; save(); redraw(); updateUI(); showLive(null); }
 $('#undo').onclick = () => { finishText(true); if (act || !undo.length) return; redo.push(snap()); restore(undo.pop()); };
 $('#redo').onclick = () => { finishText(true); if (act || !redo.length) return; undo.push(snap()); restore(redo.pop()); };
 
@@ -453,9 +468,37 @@ function bucket(x, y) {
   commit(() => { const a = P.pages[cur]; a.splice(a.findLastIndex(q => q.t === 'fill') + 1, 0, o); });
 }
 
-// very gentle smoothing against Pencil jitter: Gaussian average along the stroke over ~1 screen px;
-// the window shrinks towards the ends, so the stroke starts and ends exactly where the Pencil did
+// Very gentle smoothing against Pencil jitter. The stroke is split where it turns back (180° ± 10°,
+// e.g. hatching to colour an area) so those tips stay sharp and in place; only the runs between are smoothed.
+const CORNER = 168 * Math.PI / 180; // 180° ± 10°, with a little slack for measuring on discrete points
 function smooth(p, sigma) {
+  const n = p.length / 2;
+  if (n < 3) return p;
+  const L = [0];
+  for (let i = 1; i < n; i++) L.push(L[i - 1] + Math.hypot(p[2 * i] - p[2 * i - 2], p[2 * i + 1] - p[2 * i - 1]));
+  // turning angle measured between the stroke 2 sigma before and 2 sigma after each point
+  const d = 2 * sigma, cuts = [0];
+  let b = 0, f = 0, run = -1;
+  // the tip of a turn-back run is its point farthest from where the run started
+  const tipOf = (s0, e0) => { let k = s0, far = -1; for (let j = s0; j <= e0; j++) { const dd = Math.hypot(p[2 * j] - p[2 * s0], p[2 * j + 1] - p[2 * s0 + 1]); if (dd > far) { far = dd; k = j; } } return k; };
+  for (let i = 1; i < n - 1; i++) {
+    while (L[i] - L[b] > d) b++;
+    if (f < i) f = i;
+    while (f < n - 1 && L[f] - L[i] < d) f++;
+    const ax = p[2 * i] - p[2 * b], ay = p[2 * i + 1] - p[2 * b + 1], bx = p[2 * f] - p[2 * i], by = p[2 * f + 1] - p[2 * i + 1];
+    const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+    const t = la && lb ? Math.acos(Math.max(-1, Math.min(1, (ax * bx + ay * by) / (la * lb)))) : 0;
+    if (t >= CORNER) { if (run < 0) run = i; }
+    else if (run >= 0) { cuts.push(tipOf(run, i - 1)); run = -1; }
+  }
+  if (run >= 0) cuts.push(tipOf(run, n - 2));
+  cuts.push(n - 1);
+  const out = [p[0], p[1]];
+  for (let k = 0; k < cuts.length - 1; k++) out.push(...smoothRun(p.slice(2 * cuts[k], 2 * cuts[k + 1] + 2), sigma).slice(2));
+  return out;
+}
+// Gaussian average along one run over ~1 screen px; the window shrinks towards the ends, so the ends stay put
+function smoothRun(p, sigma) {
   const n = p.length / 2;
   if (n < 3) return p;
   const L = [0];
@@ -470,6 +513,103 @@ function smooth(p, sigma) {
   }
   out.push(p[2 * n - 2], p[2 * n - 1]);
   return out;
+}
+
+// ---------- selection: lasso or tap, then move / scale / rotate ----------
+let sel = null; // { idx: indices on the current page, f: frame { cx, cy, w, h, a } }
+function clearSel() { if (sel) { sel = null; if (!act) showLive(null); } }
+function selFrame(idx) {
+  const b = boxOf(idx.flatMap(i => { const q = bbox(P.pages[cur][i]); return [[q[0], q[1]], [q[2], q[3]]]; }));
+  return { cx: (b[0] + b[2]) / 2, cy: (b[1] + b[3]) / 2, w: b[2] - b[0], h: b[3] - b[1], a: 0 };
+}
+const frameCorners = f => rotPts([[-f.w / 2, -f.h / 2], [f.w / 2, -f.h / 2], [f.w / 2, f.h / 2], [-f.w / 2, f.h / 2]], f.cx, f.cy, f.a);
+const rotHandle = f => rotPts([[0, -f.h / 2 - 28 / scale]], f.cx, f.cy, f.a)[0];
+function drawSel(ctx) {
+  if (!sel) return;
+  const f = sel.f, cs = frameCorners(f), top = rotPts([[0, -f.h / 2]], f.cx, f.cy, f.a)[0], rh = rotHandle(f), u = 1 / scale;
+  ctx.lineWidth = 1.5 * u; ctx.strokeStyle = '#1d4ed8'; ctx.setLineDash([6 * u, 4 * u]);
+  ctx.beginPath(); cs.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(...top); ctx.lineTo(...rh); ctx.stroke();
+  ctx.fillStyle = '#fff';
+  for (const [x, y] of cs) { ctx.fillRect(x - 6 * u, y - 6 * u, 12 * u, 12 * u); ctx.strokeRect(x - 6 * u, y - 6 * u, 12 * u, 12 * u); }
+  ctx.beginPath(); ctx.arc(rh[0], rh[1], 8 * u, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+}
+function selHandle(x, y) {
+  if (!sel) return null;
+  const f = sel.f, r = 22 / scale, near = q => Math.hypot(x - q[0], y - q[1]) <= r;
+  if (near(rotHandle(f))) return { mode: 'rotate' };
+  const cs = frameCorners(f);
+  for (let k = 0; k < 4; k++) if (near(cs[k])) return { mode: 'scale', corner: cs[k], anchor: cs[(k + 2) % 4] };
+  const [[u, v]] = rotPts([[x - f.cx, y - f.cy]], 0, 0, -f.a);
+  return Math.abs(u) <= f.w / 2 + r / 2 && Math.abs(v) <= f.h / 2 + r / 2 ? { mode: 'move' } : null;
+}
+// apply a similarity transform (point map fn, uniform scale sc, rotation th) to one object; lines and text scale with it
+function transformObj(o, fn, sc, th) {
+  const tp = p => { const q = []; for (let i = 0; i < p.length; i += 2) q.push(...fn(p[i], p[i + 1])); return q; };
+  let n;
+  if (o.t === 'text') n = { ...o, p: fn(o.p[0], o.p[1]), s: o.s * sc, a: (o.a || 0) + th };
+  else if (o.t === 'fill') {
+    const [cx, cy] = fn((o.p[0] + o.p[2]) / 2, (o.p[1] + o.p[3]) / 2), hw = (o.p[2] - o.p[0]) * sc / 2, hh = (o.p[3] - o.p[1]) * sc / 2;
+    n = { ...o, p: [cx - hw, cy - hh, cx + hw, cy + hh], a: (o.a || 0) + th };
+  } else if (o.t === 'rect') {
+    const q = o.p, c = [q[0], q[1], q[2], q[1], q[2], q[3], q[0], q[3], q[0], q[1]];
+    if (th) n = { t: 'poly', c: o.c, w: o.w * sc, p: tp(c) }; // a turned rectangle is no longer axis-aligned
+    else { const t = tp(q); n = { ...o, w: o.w * sc, p: [Math.min(t[0], t[2]), Math.min(t[1], t[3]), Math.max(t[0], t[2]), Math.max(t[1], t[3])] }; }
+  } else n = { ...o, w: o.w * sc, p: tp(o.p) };
+  if (o.x) n.x = o.x.map(e => ({ ...e, w: e.w * sc, p: tp(e.p) }));
+  return n;
+}
+function insidePoly(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
+    const xi = poly[i], yi = poly[i + 1], xj = poly[j], yj = poly[j + 1];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function lassoSelect(poly) {
+  const a = P.pages[cur], idx = [];
+  a.forEach((o, i) => {
+    if (o.t === 'erase') return;
+    const b = bbox(o);
+    const pts = o.t === 'pen' || o.t === 'poly' || o.t === 'line' ? o.p
+      : [b[0], b[1], b[2], b[1], b[2], b[3], b[0], b[3], (b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+    let inn = 0;
+    for (let k = 0; k < pts.length; k += 2) if (insidePoly(pts[k], pts[k + 1], poly)) inn++;
+    if (inn * 2 >= pts.length / 2) idx.push(i); // at least half of the object's points
+  });
+  return idx;
+}
+function selectMove(x, y) {
+  const a = act;
+  if (a.mode === 'lasso') {
+    a.lasso.push(x, y);
+    viewCtx(lctx); lctx.lineWidth = 1.5 / scale; lctx.strokeStyle = '#1d4ed8'; lctx.setLineDash([6 / scale, 4 / scale]);
+    lctx.beginPath(); for (let i = 0; i < a.lasso.length; i += 2) i ? lctx.lineTo(a.lasso[i], a.lasso[i + 1]) : lctx.moveTo(a.lasso[0], a.lasso[1]);
+    lctx.stroke(); lctx.setLineDash([]);
+    return;
+  }
+  const f0 = a.f0;
+  let fn, sc = 1, th = 0, f;
+  if (a.mode === 'move') {
+    const dx = x - a.x0, dy = y - a.y0;
+    fn = (px, py) => [px + dx, py + dy]; f = { ...f0, cx: f0.cx + dx, cy: f0.cy + dy };
+  } else if (a.mode === 'scale') {
+    const [ax, ay] = a.anchor;
+    sc = Math.max(0.05, Math.hypot(x - ax, y - ay) / (Math.hypot(a.corner[0] - ax, a.corner[1] - ay) || 1));
+    fn = (px, py) => [ax + (px - ax) * sc, ay + (py - ay) * sc];
+    const [cx, cy] = fn(f0.cx, f0.cy); f = { ...f0, cx, cy, w: f0.w * sc, h: f0.h * sc };
+  } else {
+    th = Math.atan2(y - f0.cy, x - f0.cx) - Math.atan2(a.y0 - f0.cy, a.x0 - f0.cx);
+    const c = Math.cos(th), s = Math.sin(th);
+    fn = (px, py) => [f0.cx + (px - f0.cx) * c - (py - f0.cy) * s, f0.cy + (px - f0.cx) * s + (py - f0.cy) * c];
+    f = { ...f0, a: f0.a + th };
+  }
+  a.changed = true;
+  sel.idx.forEach((i, k) => { P.pages[cur][i] = transformObj(a.orig[k], fn, sc, th); });
+  sel.f = f;
+  redraw(); showLive(null);
 }
 
 // ---------- pointer input ----------
@@ -491,10 +631,14 @@ live.addEventListener('pointerdown', e => {
   act = { id: e.pointerId, touch: e.pointerType === 'touch', t, r, x0: x, y0: y, sm: 1.2 / scale };
   if (t === 'pen') act.o = { t, c: st.color, w: st.width, p: [x, y] };
   else if (t === 'line' || t === 'rect') act.o = { t, c: st.color, w: st.width, p: [x, y, x, y] };
-  else if (t === 'move') {
-    const i = topHit(x, y);
-    if (i < 0) { act = null; return; }
-    begin(); act.i = i; act.orig = P.pages[cur][i];
+  else if (t === 'select') {
+    let h = selHandle(x, y);
+    if (!h) {
+      const i = topHit(x, y);
+      if (i >= 0) { sel = { idx: [i], f: selFrame([i]) }; h = { mode: 'move' }; } // tap on a shape: select it and drag right away
+    }
+    if (h) { Object.assign(act, h); begin(); act.orig = sel.idx.map(i => P.pages[cur][i]); act.f0 = { ...sel.f }; }
+    else { sel = null; act.mode = 'lasso'; act.lasso = [x, y]; }
   }
   else if (t === 'erase' && st.eraseMode === 'part') act.o = { t: 'erase', c: '#000', w: st.eraseWidth, p: [x, y] };
   else if (t === 'erase') { begin(); erase(x, y); }
@@ -512,11 +656,7 @@ function move(e) {
   const [x, y] = pos(e, act.r);
   if (act.t === 'line') act.o.p = [act.x0, act.y0, ...snapLine(act.x0, act.y0, x, y)];
   else if (act.t === 'rect') act.o.p = [act.x0, act.y0, x, y];
-  else if (act.t === 'move') {
-    act.changed = x !== act.x0 || y !== act.y0;
-    P.pages[cur][act.i] = moved(act.orig, x - act.x0, y - act.y0);
-    redraw();
-  }
+  else if (act.t === 'select') return selectMove(x, y);
   if (act.o?.t === 'erase') {
     // erase straight on the base canvas for instant feedback, show the eraser size as a ring
     drawObj(bctx, act.o);
@@ -538,7 +678,12 @@ function up(e) {
   else if (a.t === 'line' && Math.hypot(p[2] - p[0], p[3] - p[1]) > 0.5) commit(() => P.pages[cur].push(a.o));
   else if (a.t === 'rect' && Math.abs(p[2] - p[0]) > 0.5 && Math.abs(p[3] - p[1]) > 0.5)
     commit(() => P.pages[cur].push({ ...a.o, p: [Math.min(p[0], p[2]), Math.min(p[1], p[3]), Math.max(p[0], p[2]), Math.max(p[1], p[3])] }));
-  else if (a.t === 'move' || a.t === 'erase') end(!!a.changed);
+  else if (a.t === 'select' && a.mode === 'lasso') {
+    const idx = a.lasso.length >= 6 ? lassoSelect(a.lasso) : [];
+    sel = idx.length ? { idx, f: selFrame(idx) } : null;
+    showLive(null);
+  }
+  else if (a.t === 'select' || a.t === 'erase') { end(!!a.changed); showLive(null); }
   else if (a.t === 'text' && e.type === 'pointerup') openText(a.x0, a.y0);
   else if (a.t === 'fill' && e.type === 'pointerup') bucket(a.x0, a.y0);
 }
@@ -580,7 +725,7 @@ function finishText(ok) {
   if (!te) return;
   textEdit = null; $('#textbox').hidden = true; ta.blur();
   if (!ok) return;
-  const text = ta.value.replace(/\s+$/, ''), o = { t: 'text', c: st.color, s: st.textSize, p: [te.x, te.y], text }, g = te.orig;
+  const text = ta.value.replace(/\s+$/, ''), g = te.orig, o = { t: 'text', c: st.color, s: st.textSize, p: [te.x, te.y], text, ...(g?.a && { a: g.a }) };
   if (te.i < 0) { if (text) commit(() => P.pages[cur].push(o)); }
   else if (!text) commit(() => P.pages[cur].splice(te.i, 1));
   else if (text !== g.text || o.c !== g.c || o.s !== g.s) commit(() => { P.pages[cur][te.i] = o; });
@@ -590,7 +735,7 @@ $('#tcancel').onclick = () => finishText(false);
 
 // ---------- toolbar ----------
 for (const b of document.querySelectorAll('#tools button')) b.onclick = () => {
-  finishText(true);
+  finishText(true); clearSel();
   st.tool = b.dataset.tool;
   for (const x of document.querySelectorAll('#tools button')) x.classList.toggle('on', x === b);
   buildSizes();
@@ -624,7 +769,7 @@ function sizeSlider(key) {
 function buildSizes() {
   sizeDot = null;
   const t = st.tool, box = $('#sizes'), items = [];
-  box.hidden = t === 'move' || t === 'fill';
+  box.hidden = t === 'select' || t === 'fill';
   if (t === 'erase') for (const [m, label] of [['part', 'Část'], ['whole', 'Celé tahy']]) {
     const b = el('button', 'mode' + (st.eraseMode === m ? ' on' : ''), label);
     b.onclick = () => { st.eraseMode = m; localStorage.setItem('eraseMode', m); buildSizes(); };
@@ -671,7 +816,7 @@ function updateUI() {
   $('#undo').disabled = !undo.length;
   $('#redo').disabled = !redo.length;
 }
-const go = i => { finishText(true); cur = i; redraw(); updateUI(); };
+const go = i => { finishText(true); clearSel(); cur = i; redraw(); updateUI(); };
 $('#prev').onclick = () => go(cur - 1);
 $('#next').onclick = () => go(cur + 1);
 $('#addpage').onclick = () => { finishText(true); commit(() => { P.pages.splice(cur + 1, 0, []); cur++; }); };
@@ -750,6 +895,7 @@ function validProject(d) {
   const okObj = o => o && ['pen', 'line', 'rect', 'poly', 'text', 'erase', 'fill'].includes(o.t) && typeof o.c === 'string' && Array.isArray(o.p) &&
     o.p.length >= 2 && o.p.length % 2 === 0 && o.p.every(num) && (o.t === 'text' ? typeof o.text === 'string' && num(o.s) && o.s > 0
       : o.t === 'fill' ? o.p.length === 4 && typeof o.m === 'string' && o.m.startsWith('data:image/png;base64,') : num(o.w) && o.w > 0) &&
+    (o.a === undefined || num(o.a)) &&
     (o.x === undefined || Array.isArray(o.x) && o.x.every(okErase));
   return d && typeof d.name === 'string' && num(d.w) && num(d.h) && d.w > 0 && d.h > 0 &&
     Array.isArray(d.pages) && d.pages.length > 0 && d.pages.every(pg => Array.isArray(pg) && pg.every(okObj));
