@@ -24,7 +24,8 @@ Duplikovat a Smazat. Všechno se ukládá samo.
 - **Pero:** volná čára. Tloušťku nastavíš posuvníkem od 0,1 mm (asi 1 pixel v exportu) do
   10 mm. Tlačítky − a + ji jemně doladíš. Puntík nad posuvníkem ukazuje tloušťku tak, jak
   vypadá při aktuálním zoomu, pod ním je číslo v mm. Čára a Obdélník používají stejnou
-  tloušťku. Appka si ji pamatuje.
+  tloušťku. Appka si ji pamatuje. Tahy se jemně vyhlazují (asi o 1 pixel obrazovky), aby
+  zmizelo chvění, konce tahu zůstanou přesně tam, kde jsi začala a skončila.
 - **Čára:** rovná čára z bodu A do B. Do 5° od vodorovné nebo svislé se srovná.
 - **Obdélník:** na rámečky panelů.
 - **Text:** ťukni na místo, napiš text a dej OK. Ťuknutím na existující text ho upravíš.
@@ -34,6 +35,10 @@ Duplikovat a Smazat. Všechno se ukládá samo.
   - **Část** (tloušťka posuvníkem od 0,1 do 40 mm) maže jen to, přes co přejedeš. Čára, tah
     perem nebo obdélník se v tom místě rozdělí na kousky.
   - **Celé tahy** smaže celé objekty (nebo kousky), kterých se dotkneš.
+- **Kyblík:** ťukni do ohraničeného místa a vyplní se aktuální barvou. Výplň je vždy pod
+  čarami a textem. Ťuknutím do vyplněného místa jinou barvou ho přebarvíš. Ťuknutím mimo
+  všechno obarvíš pozadí. Když je v ohraničení mezera, barva proteče ven, pak dej Zpět,
+  dokresli mezeru a zkus to znovu. Výplň jde posunout, smazat gumou i vrátit přes Zpět.
 - **Barvy:** deset základních a duhové pole pro vlastní barvu.
 
 **Horní lišta:** zpět/znovu (funguje pro všechny akce včetně práce se stránkami), přepínání
@@ -87,6 +92,7 @@ Projekt { id, name, w, h, v: 4, pages: [[objekt…], …], updated }
 objekt  { t: 'pen' | 'line' | 'rect', c: barva, w: tloušťka, p: [x, y, x, y…] }
         { t: 'poly', c, w, p: [x, y, x, y…] }   kousek rozdělené čáry (rovné úseky)
         { t: 'text', c: barva, s: velikost písma, p: [x, y], text }
+        { t: 'fill', c: barva, p: [x0, y0, x1, y1], m: 'data:image/png;base64,…' }   výplň kyblíkem
         kterýkoli může mít x: [{ t: 'erase', c, w: tloušťka gumy, p: [x, y…] }, …]
 ```
 
@@ -122,6 +128,17 @@ objekt  { t: 'pen' | 'line' | 'rect', c: barva, w: tloušťka, p: [x, y, x, y…
     kousek má zase jen 2 body.
   - Úsek, který guma jen škrtne, text a guma tenčí než čára dostanou ořez `x`. U tenké gumy
     přes silnou čáru by dva kulaté konce vedle sebe vypadaly jako přiškrcení.
+- **Vyhlazení tahu** (`smooth`): Gaussův průměr podél tahu se šířkou 1,2 CSS px přepočtenou
+  na mm podle zoomu při kreslení. U konců se okno zmenšuje, takže začátek a konec tahu se
+  nepohnou. Body se zaznamenávají po půl pixelu obrazovky, takže kreslení při velkém zoomu
+  není hranaté. Živý náhled ukazuje už vyhlazený tah.
+- **Kyblík** (`bucket`): stránka bez ostatních výplní se vykreslí do pomocného plátna
+  v 6 px/mm (asi 150 DPI). Z místa ťuknutí se vyplní všechny sousední pixely, které nejsou
+  čára. Výplň se pak o 2 px rozšíří pod okolní čáry, aby u kraje nezůstal bílý lem.
+  Výsledná maska se uloží jako PNG (už obarvené) jen v rozsahu výplně a vloží se nad
+  ostatní výplně, ale pod všechno ostatní. Obrázky výplní se dekódují jednou a pamatují se
+  (`fillCache`). Export a náhledy na ně počkají (`fillsReady`). Zásah posunem a gumou
+  „Celé tahy“ se pozná podle průhlednosti masky.
 - **Export:** každá stránka se vykreslí do pomocného plátna v 200 DPI. Když by měla víc
   než 15 Mpx (limit iOS Safari je asi 16,7 Mpx), DPI se sníží. Plátno se hned uvolní
   (`width = 0`). JPEG obrázky jdou do `pdf.js` jako Bloby, takže ani 25 stran nezahltí
@@ -168,7 +185,7 @@ tlačítkem „Sdílet soubor“. Opravdové sdílení se dá vyzkoušet jen na 
 
 ## Nasazení nové verze
 
-1. V `sw.js` zvyš `VERSION` (teď `komiks-v7`). Bez toho by appka na ploše dál používala
+1. V `sw.js` zvyš `VERSION` (teď `komiks-v8`). Bez toho by appka na ploše dál používala
    staré soubory.
 2. `git commit` a `git push`. GitHub Pages to asi za minutu nasadí.
 3. V appce se nová verze načte, až se vrátíš na seznam projektů. Uprostřed kreslení se
@@ -185,6 +202,9 @@ tlačítkem „Sdílet soubor“. Opravdové sdílení se dá vyzkoušet jen na 
   „Sdílet / poslat“ → Uložit do Souborů.
 - Text a čáry jen škrtnuté gumou po okraji si nesou pixelový ořez. Když jich je na stránce
   hodně, kreslení a zoom se můžou zpomalit.
+- Výplň kyblíkem má rozlišení asi 150 DPI. Okraj se schová pod čáru, ale u tenké čáry
+  (pod 0,3 mm) může být při velkém zoomu nebo v exportu vidět lehce zubatý kraj.
+- Kyblík nezavírá mezery v čarách: i malá mezera nechá barvu protéct.
 - Okraje mezery po gumě jsou kulaté jako konec čáry, ne podle tvaru gumy.
 - Čára 0,1 mm je při celé stránce na displeji jen slabě vidět (je tenčí než pixel displeje).
   Po přiblížení i v exportu je vidět normálně.

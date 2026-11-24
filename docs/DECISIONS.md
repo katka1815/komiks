@@ -2,6 +2,22 @@
 
 Nejnovější nahoře. Ke každé změně: co, proč a co zůstává otevřené.
 
+## 2026-11-24: Jemné vyhlazení tahů a kyblík (`komiks-v8`)
+
+- **Vyhlazení:** Katka chtěla jen velmi jemné, aby se vyrovnalo chvění Pencilu. Je to
+  Gaussův průměr podél tahu se šířkou 1,2 CSS px (v mm podle zoomu při kreslení), takže při
+  každém zoomu vyhladí stejně málo. Konce zůstávají přesně na místě. Kostrbatost klesne
+  asi na třetinu a tah se posune nejvýš o 0,17 mm. Nastavení síly vyhlazení appka nemá,
+  Katka o něj nežádala.
+- K hranatosti přispíval i pevný krok záznamu 0,15 mm, který byl při zoomu 8× vidět jako
+  zuby. Body se teď zaznamenávají po půl pixelu obrazovky.
+- **Kyblík:** výplň je rastrová maska (PNG v `m`). Vektorový obrys výplně (trasování
+  hranice včetně děr) by byl mnohem víc kódu a výsledek pod čarou vypadá stejně.
+  Rozlišení 6 px/mm drží masky malé (jednotky kB) a výplň A4 trvá asi 150 ms.
+- Výplně jsou vždycky pod čarami a textem, takže jejich okraj čáry zakryjí. Hranice se
+  počítá bez ostatních výplní, takže přebarvení vloží novou výplň nad starou.
+- Ikona kyblíku je vlastní SVG. Emoji 🪣 se na Windows nezobrazí a na starších iOS taky ne.
+
 ## 2026-11-23: Plynulá tloušťka pera a gumy od 0,1 mm (`komiks-v7`)
 
 - Místo čtyř pevných velikostí je teď posuvník s tlačítky − a + a číslem v mm. Pero, čára

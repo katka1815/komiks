@@ -93,6 +93,7 @@ function drawObj(ctx, o) {
 }
 function bbox(o) {
   if (o.t === 'text') return textBox(o);
+  if (o.t === 'fill') return o.p;
   const xs = o.p.filter((_, i) => i % 2 === 0), ys = o.p.filter((_, i) => i % 2), r = o.w / 2 + 1;
   return [Math.min(...xs) - r, Math.min(...ys) - r, Math.max(...xs) + r, Math.max(...ys) + r];
 }
@@ -109,8 +110,8 @@ function touches_(o, e) {
   if (!boxesMeet(bbox(o), bbox({ p: e.p, w: e.w }))) return false;
   const ep = e.p.length === 2 ? [...e.p, ...e.p] : e.p;
   let pts = o.p, lim = r + (o.w || 0) / 2;
-  if (o.t === 'text') {
-    const [x0, y0, x1, y1] = textBox(o);
+  if (o.t === 'text' || o.t === 'fill') {
+    const [x0, y0, x1, y1] = bbox(o);
     for (let i = 0; i < ep.length; i += 2) if (ep[i] >= x0 && ep[i] <= x1 && ep[i + 1] >= y0 && ep[i + 1] <= y1) return true;
     pts = [x0, y0, x1, y0, x1, y1, x0, y1, x0, y0]; lim = r;
   } else if (o.t === 'rect') pts = [pts[0], pts[1], pts[2], pts[1], pts[2], pts[3], pts[0], pts[3], pts[0], pts[1]];
@@ -153,7 +154,7 @@ function eraseFrom(o, e) {
   if (o.t === 'erase' || !touches_(o, e)) return [o];
   const withCut = () => [{ ...o, x: [...(o.x || []), e] }];
   // text can't be split; an eraser thinner than the line would leave a pinched gap between two round caps
-  if (o.t === 'text' || e.w < o.w) return withCut();
+  if (o.t === 'text' || o.t === 'fill' || e.w < o.w) return withCut();
   const r = e.w / 2, h = o.w / 2, eb = bbox({ p: e.p, w: e.w + o.w });
   const s = centerline(o, eb, Math.min(0.3, Math.max(0.02, Math.min(e.w, o.w) / 3))), n = s.length / 2;
   const full = [], touched = [];
@@ -229,8 +230,36 @@ function upgradePage(objs) {
   }
   return out;
 }
+// bucket fills are stored as PNG masks (already coloured); decoded images are cached by their data URL
+const fillCache = new Map();
+function fillEntry(o) {
+  let f = fillCache.get(o.m);
+  if (!f) {
+    f = { img: new Image(), ok: false };
+    f.ready = new Promise(res => {
+      f.img.onload = () => { f.ok = true; res(); if (P && !act) redraw(); };
+      f.img.onerror = res;
+    });
+    f.img.src = o.m;
+    fillCache.set(o.m, f);
+  }
+  return f;
+}
+const fillsReady = pages => Promise.all(pages.flat().filter(o => o.t === 'fill').map(o => fillEntry(o).ready));
+function fillAlpha(o) { // mask pixels for hit testing, read once per image
+  const f = fillEntry(o);
+  if (!f.ok) return null;
+  if (!f.alpha) {
+    const c = document.createElement('canvas'), w = c.width = f.img.naturalWidth, h = c.height = f.img.naturalHeight, x = c.getContext('2d');
+    x.drawImage(f.img, 0, 0);
+    f.alpha = { d: x.getImageData(0, 0, w, h).data, w, h };
+    c.width = c.height = 0;
+  }
+  return f.alpha;
+}
 function drawShape(ctx, o) {
   const p = o.p;
+  if (o.t === 'fill') { const f = fillEntry(o); if (f.ok) ctx.drawImage(f.img, p[0], p[1], p[2] - p[0], p[3] - p[1]); return; }
   ctx.strokeStyle = ctx.fillStyle = o.c;
   if (o.t === 'text') {
     // draw at 10x and scale down: Safari rasterizes tiny font sizes poorly
@@ -342,6 +371,11 @@ function textBox(o) {
 }
 function hit(o, x, y, tol) {
   const p = o.p;
+  if (o.t === 'fill') {
+    if (x < p[0] || x > p[2] || y < p[1] || y > p[3]) return false;
+    const a = fillAlpha(o);
+    return !a || a.d[(Math.min(a.h - 1, Math.floor((y - p[1]) / (p[3] - p[1]) * a.h)) * a.w + Math.min(a.w - 1, Math.floor((x - p[0]) / (p[2] - p[0]) * a.w))) * 4 + 3] > 0;
+  }
   if (o.t === 'text') { const b = textBox(o); return x >= b[0] - tol && x <= b[2] + tol && y >= b[1] - tol && y <= b[3] + tol; }
   const pts = o.t === 'rect' ? [p[0], p[1], p[2], p[1], p[2], p[3], p[0], p[3], p[0], p[1]] : p, r = tol + o.w / 2;
   if (pts.length === 2) return Math.hypot(x - pts[0], y - pts[1]) <= r;
@@ -373,6 +407,71 @@ function restore(s) { P.pages = s.pages; cur = s.cur; save(); redraw(); updateUI
 $('#undo').onclick = () => { finishText(true); if (act || !undo.length) return; redo.push(snap()); restore(undo.pop()); };
 $('#redo').onclick = () => { finishText(true); if (act || !redo.length) return; undo.push(snap()); restore(redo.pop()); };
 
+// ---------- bucket fill ----------
+const FILL_K = 6;  // px per mm of fill masks (~150 DPI); the edge tucks under the lines anyway
+const FILL_TUCK = 2; // px the fill grows under the surrounding lines, so no white seam shows
+function bucket(x, y) {
+  const W = Math.ceil(P.w * FILL_K), H = Math.ceil(P.h * FILL_K), sx = Math.floor(x * FILL_K), sy = Math.floor(y * FILL_K);
+  if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
+  // walls = everything drawn except other fills, so a fill can be recoloured
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d'); ctx.setTransform(FILL_K, 0, 0, FILL_K, 0, 0);
+  for (const o of P.pages[cur]) if (o.t !== 'fill') drawObj(ctx, o);
+  const src = ctx.getImageData(0, 0, W, H).data;
+  c.width = c.height = 0; scratch.width = scratch.height = 0;
+  const wall = i => src[i * 4 + 3] > 100;
+  const start = sy * W + sx;
+  if (wall(start)) return toast('Ťukni dovnitř ohraničeného místa, ne na čáru.');
+  const seen = new Uint8Array(W * H), stack = new Int32Array(W * H);
+  let top = 0, x0 = sx, x1 = sx, y0 = sy, y1 = sy;
+  const push = i => { seen[i] = 1; stack[top++] = i; };
+  push(start);
+  while (top) {
+    const i = stack[--top], px = i % W, py = (i - px) / W;
+    if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+    if (px > 0 && !seen[i - 1] && !wall(i - 1)) push(i - 1);
+    if (px < W - 1 && !seen[i + 1] && !wall(i + 1)) push(i + 1);
+    if (py > 0 && !seen[i - W] && !wall(i - W)) push(i - W);
+    if (py < H - 1 && !seen[i + W] && !wall(i + W)) push(i + W);
+  }
+  x0 = Math.max(0, x0 - FILL_TUCK); y0 = Math.max(0, y0 - FILL_TUCK); x1 = Math.min(W - 1, x1 + FILL_TUCK); y1 = Math.min(H - 1, y1 + FILL_TUCK);
+  for (let t = 1; t <= FILL_TUCK; t++) // grow into the neighbouring line pixels
+    for (let py = y0; py <= y1; py++) for (let px = x0; px <= x1; px++) {
+      const i = py * W + px;
+      if (!seen[i] && ((px > 0 && seen[i - 1] === t) || (px < W - 1 && seen[i + 1] === t) || (py > 0 && seen[i - W] === t) || (py < H - 1 && seen[i + W] === t))) seen[i] = t + 1;
+    }
+  const w = x1 - x0 + 1, h = y1 - y0 + 1, m = document.createElement('canvas'); m.width = w; m.height = h;
+  const mc = m.getContext('2d'), img = mc.createImageData(w, h), col = parseInt(st.color.slice(1), 16);
+  for (let py = 0; py < h; py++) for (let px = 0; px < w; px++) if (seen[(py + y0) * W + px + x0]) {
+    const j = (py * w + px) * 4;
+    img.data[j] = col >> 16; img.data[j + 1] = (col >> 8) & 255; img.data[j + 2] = col & 255; img.data[j + 3] = 255;
+  }
+  mc.putImageData(img, 0, 0);
+  const o = { t: 'fill', c: st.color, p: [x0 / FILL_K, y0 / FILL_K, (x1 + 1) / FILL_K, (y1 + 1) / FILL_K], m: m.toDataURL('image/png') };
+  m.width = m.height = 0;
+  // fills sit under all lines and text, newest fill on top of older fills
+  commit(() => { const a = P.pages[cur]; a.splice(a.findLastIndex(q => q.t === 'fill') + 1, 0, o); });
+}
+
+// very gentle smoothing against Pencil jitter: Gaussian average along the stroke over ~1 screen px;
+// the window shrinks towards the ends, so the stroke starts and ends exactly where the Pencil did
+function smooth(p, sigma) {
+  const n = p.length / 2;
+  if (n < 3) return p;
+  const L = [0];
+  for (let i = 1; i < n; i++) L.push(L[i - 1] + Math.hypot(p[2 * i] - p[2 * i - 2], p[2 * i + 1] - p[2 * i - 1]));
+  const out = [p[0], p[1]];
+  for (let i = 1; i < n - 1; i++) {
+    const r = Math.min(3 * sigma, L[i], L[n - 1] - L[i]);
+    let sx = 0, sy = 0, sw = 0;
+    for (let j = i; j >= 0 && L[i] - L[j] <= r; j--) { const w = Math.exp(-((L[i] - L[j]) ** 2) / (2 * sigma * sigma)); sx += w * p[2 * j]; sy += w * p[2 * j + 1]; sw += w; }
+    for (let j = i + 1; j < n && L[j] - L[i] <= r; j++) { const w = Math.exp(-((L[j] - L[i]) ** 2) / (2 * sigma * sigma)); sx += w * p[2 * j]; sy += w * p[2 * j + 1]; sw += w; }
+    out.push(sx / sw, sy / sw);
+  }
+  out.push(p[2 * n - 2], p[2 * n - 1]);
+  return out;
+}
+
 // ---------- pointer input ----------
 const pos = (e, r) => [(e.clientX - r.left - ox) / scale, (e.clientY - r.top - oy) / scale];
 function erase(x, y) {
@@ -389,7 +488,7 @@ live.addEventListener('pointerdown', e => {
   if (act) return;
   live.setPointerCapture(e.pointerId);
   const r = live.getBoundingClientRect(), [x, y] = pos(e, r), t = st.tool;
-  act = { id: e.pointerId, touch: e.pointerType === 'touch', t, r, x0: x, y0: y };
+  act = { id: e.pointerId, touch: e.pointerType === 'touch', t, r, x0: x, y0: y, sm: 1.2 / scale };
   if (t === 'pen') act.o = { t, c: st.color, w: st.width, p: [x, y] };
   else if (t === 'line' || t === 'rect') act.o = { t, c: st.color, w: st.width, p: [x, y, x, y] };
   else if (t === 'move') {
@@ -407,7 +506,7 @@ function move(e) {
     const [x, y] = pos(ev, act.r);
     if (act.t === 'pen' || act.o?.t === 'erase') {
       const p = act.o.p;
-      if (Math.hypot(x - p[p.length - 2], y - p[p.length - 1]) >= 0.15) p.push(x, y);
+      if (Math.hypot(x - p[p.length - 2], y - p[p.length - 1]) >= 0.5 / scale) p.push(x, y); // half a screen px
     } else if (act.t === 'erase') erase(x, y);
   }
   const [x, y] = pos(e, act.r);
@@ -423,7 +522,7 @@ function move(e) {
     drawObj(bctx, act.o);
     viewCtx(lctx); lctx.lineWidth = 1 / scale; lctx.strokeStyle = '#888';
     lctx.beginPath(); lctx.arc(x, y, act.o.w / 2, 0, 2 * Math.PI); lctx.stroke();
-  } else showLive(act.o);
+  } else showLive(act.t === 'pen' ? { ...act.o, p: smooth(act.o.p, act.sm) } : act.o);
 }
 live.addEventListener('pointermove', e => {
   if (touches.has(e.pointerId) && !(act && act.id === e.pointerId)) return gestureMove(e);
@@ -435,12 +534,13 @@ function up(e) {
   const a = act; act = null; showLive(null);
   const p = a.o?.p;
   if (a.o?.t === 'erase') commit(() => { P.pages[cur] = applyErase(P.pages[cur], a.o); });
-  else if (a.t === 'pen') commit(() => P.pages[cur].push(a.o));
+  else if (a.t === 'pen') commit(() => P.pages[cur].push({ ...a.o, p: smooth(a.o.p, a.sm) }));
   else if (a.t === 'line' && Math.hypot(p[2] - p[0], p[3] - p[1]) > 0.5) commit(() => P.pages[cur].push(a.o));
   else if (a.t === 'rect' && Math.abs(p[2] - p[0]) > 0.5 && Math.abs(p[3] - p[1]) > 0.5)
     commit(() => P.pages[cur].push({ ...a.o, p: [Math.min(p[0], p[2]), Math.min(p[1], p[3]), Math.max(p[0], p[2]), Math.max(p[1], p[3])] }));
   else if (a.t === 'move' || a.t === 'erase') end(!!a.changed);
   else if (a.t === 'text' && e.type === 'pointerup') openText(a.x0, a.y0);
+  else if (a.t === 'fill' && e.type === 'pointerup') bucket(a.x0, a.y0);
 }
 live.addEventListener('pointerup', up);
 live.addEventListener('pointercancel', up);
@@ -524,7 +624,7 @@ function sizeSlider(key) {
 function buildSizes() {
   sizeDot = null;
   const t = st.tool, box = $('#sizes'), items = [];
-  box.hidden = t === 'move';
+  box.hidden = t === 'move' || t === 'fill';
   if (t === 'erase') for (const [m, label] of [['part', 'Část'], ['whole', 'Celé tahy']]) {
     const b = el('button', 'mode' + (st.eraseMode === m ? ' on' : ''), label);
     b.onclick = () => { st.eraseMode = m; localStorage.setItem('eraseMode', m); buildSizes(); };
@@ -600,6 +700,7 @@ async function showHome() {
   try { list = await dbAll(); } catch (e) { toast('Projekty nejde načíst: ' + e.message); }
   list.sort((a, b) => b.updated - a.updated);
   $('#empty').hidden = list.length > 0;
+  await fillsReady(list.map(p => p.pages[0]));
   $('#projects').replaceChildren(...list.map(card));
 }
 $('#back').onclick = showHome;
@@ -646,8 +747,9 @@ $('#new').onclick = async () => {
 function validProject(d) {
   const num = v => typeof v === 'number' && isFinite(v);
   const okErase = e => e && e.t === 'erase' && Array.isArray(e.p) && e.p.length >= 2 && e.p.length % 2 === 0 && e.p.every(num) && num(e.w) && e.w > 0;
-  const okObj = o => o && ['pen', 'line', 'rect', 'poly', 'text', 'erase'].includes(o.t) && typeof o.c === 'string' && Array.isArray(o.p) &&
-    o.p.length >= 2 && o.p.length % 2 === 0 && o.p.every(num) && (o.t === 'text' ? typeof o.text === 'string' && num(o.s) && o.s > 0 : num(o.w) && o.w > 0) &&
+  const okObj = o => o && ['pen', 'line', 'rect', 'poly', 'text', 'erase', 'fill'].includes(o.t) && typeof o.c === 'string' && Array.isArray(o.p) &&
+    o.p.length >= 2 && o.p.length % 2 === 0 && o.p.every(num) && (o.t === 'text' ? typeof o.text === 'string' && num(o.s) && o.s > 0
+      : o.t === 'fill' ? o.p.length === 4 && typeof o.m === 'string' && o.m.startsWith('data:image/png;base64,') : num(o.w) && o.w > 0) &&
     (o.x === undefined || Array.isArray(o.x) && o.x.every(okErase));
   return d && typeof d.name === 'string' && num(d.w) && num(d.h) && d.w > 0 && d.h > 0 &&
     Array.isArray(d.pages) && d.pages.length > 0 && d.pages.every(pg => Array.isArray(pg) && pg.every(okObj));
@@ -680,6 +782,7 @@ async function pdfFile(idx, name) {
   return new File([w.finish()], name, { type: 'application/pdf' });
 }
 async function makeFile(kind) {
+  await fillsReady(P.pages);
   const n = safeName(P.name), pg = `${n}_strana-${cur + 1}`;
   if (kind === 'pdf-all') return pdfFile(P.pages.map((_, i) => i), `${n}.pdf`);
   if (kind === 'pdf-page') return pdfFile([cur], `${pg}.pdf`);
